@@ -270,9 +270,48 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 214. AFTER: order[0]=1 (PFN=1001). order[1]=1 (PFN=1002-1003). order[2]=1 (PFN=1004-1007). order[3]=0.
 215. VERIFY: 1+2+4+0=7 pages in lists. 1 page given to caller. 7+1=8 pages. Original order[3]=8 pages. ✓
 216. ---
-217. BIT PATTERN CALCULATION: BUDDY XOR
+217. DEFINITION: WHAT IS A BUDDY? (FROM SCRATCH)
 218. ---
-219. PROBLEM: PFN=1000, order=3. Find buddy. Verify with bits.
+219. PROBLEM: Block at PFN=1000, order=3 (8 pages) is freed. Where to put it?
+220. NAIVE: Put in free_area[3] list. Done. PROBLEM: Fragmentation over time.
+221. BETTER: If ANOTHER 8-page block is ADJACENT and FREE, MERGE into 16-page block.
+222. QUESTION: What does ADJACENT mean for blocks?
+223. ANSWER: Two blocks are adjacent if one ends where the other starts. No gap. No overlap.
+224. EXAMPLE: Block A = PFN 1000-1007 (8 pages). Block B = PFN 1008-1015 (8 pages). Adjacent? 1007+1=1008. ✓ Adjacent.
+225. EXAMPLE: Block A = PFN 1000-1007. Block C = PFN 992-999 (8 pages). Adjacent? 999+1=1000. ✓ Adjacent.
+226. OBSERVATION: Block at PFN=1000 has TWO adjacent blocks: one BEFORE (992-999), one AFTER (1008-1015).
+227. QUESTION: Which adjacent block is the BUDDY? Left one (992) or right one (1008)?
+228. ANSWER: Only ONE is the buddy. The other is NOT. Why?
+229. REASON: Merged block must be ALIGNED. Alignment = starting PFN divisible by merged block size.
+230. MERGED SIZE: Two 8-page blocks merge into one 16-page block (order=4).
+231. ALIGNMENT REQUIREMENT: 16-page block must start at PFN divisible by 16.
+232. CHECK PFN=1000: 1000 ÷ 16 = 62.5. Not integer. 1000 is NOT 16-aligned.
+233. CHECK PFN=992: 992 ÷ 16 = 62. Integer. 992 IS 16-aligned. ✓
+234. CHECK PFN=1008: 1008 ÷ 16 = 63. Integer. 1008 IS 16-aligned. ✓
+235. PROBLEM: Both 992 and 1008 are 16-aligned. Which forms valid parent with 1000?
+236. PARENT COVERAGE: 16-page block at PFN=992 covers 992-1007. Does it include 1000-1007? 1000≥992 ✓. 1007<1008 ✓. YES.
+237. PARENT COVERAGE: 16-page block at PFN=1008 covers 1008-1023. Does it include 1000-1007? 1000≥1008? NO. ✗
+238. CONCLUSION: Block 992-999 is BUDDY of block 1000-1007. Block 1008-1015 is NOT buddy.
+239. DEFINITION: BUDDY = the OTHER half of the SAME parent block.
+240. DRAW PARENT: 16-page parent at PFN=992:
+241. |PFN 992|993|994|995|996|997|998|999|1000|1001|1002|1003|1004|1005|1006|1007|
+242. |<-------- FIRST HALF = BUDDY -------->|<-------- SECOND HALF = OUR BLOCK -->|
+243. |<-------- 8 pages at PFN=992 -------->|<-------- 8 pages at PFN=1000 ------->|
+244. QUESTION: How many buddies does a block have?
+245. ANSWER: Exactly ONE. Because each block belongs to exactly one parent. Parent splits into exactly two halves.
+246. QUESTION: Is buddy in SAME gang or DIFFERENT gang?
+247. CLARIFY: "Gang" = free_area[N] list. Block at order=3 is in free_area[3] gang.
+248. ANSWER: Buddy is in SAME gang (same order). Both have size 2^3=8 pages. Both are (or were) in free_area[3].
+249. QUESTION: How to find buddy PFN mathematically?
+250. OBSERVATION: Parent starts at 16-aligned PFN. Two children: first half at parent_pfn, second half at parent_pfn+8.
+251. OBSERVATION: First half has bit 3 CLEAR (divisible by 16). Second half has bit 3 SET (not divisible by 16).
+252. FORMULA INSIGHT: Buddy = same parent, opposite half. Flip bit at position ORDER to toggle halves.
+253. FORMULA: buddy_pfn = pfn XOR (1 << order). XOR flips bit at position ORDER.
+254. VERIFY: pfn=1000, order=3. 1<<3=8. buddy=1000 XOR 8.
+255. ---
+256. BIT PATTERN CALCULATION: BUDDY XOR (NOW WITH CONTEXT)
+257. ---
+258. PROBLEM: PFN=1000, order=3. Find buddy using XOR. Verify with bits.
 220. PFN=1000 in binary: 1000÷2=500r0. 500÷2=250r0. 250÷2=125r0. 125÷2=62r1. 62÷2=31r0. 31÷2=15r1. 15÷2=7r1. 7÷2=3r1. 3÷2=1r1. 1÷2=0r1. Read bottom-up: 1111101000.
 221. VERIFY: 1111101000 = 512+256+128+64+32+0+8+0+0+0 = 512+256+128+64+32+8 = 1000. ✓
 222. XOR MASK: 1<<3 = 8 = 1000 in binary = 0000001000 (10 bits).
