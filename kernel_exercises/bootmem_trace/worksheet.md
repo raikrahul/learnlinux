@@ -619,3 +619,165 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 357. ---
 358. END OF BUDDY ALGORITHM
 359. ---
+360. ===
+361. SOURCE CODE PROOFS FOR EACH ASSERTION
+362. ===
+363. ---
+364. ASSERTION: buddy_pfn = pfn XOR (1 << order)
+365. PROOF: File /usr/src/linux-source-6.8.0/mm/internal.h lines 385-389:
+366. ```c
+367. static inline unsigned long
+368. __find_buddy_pfn(unsigned long page_pfn, unsigned int order)
+369. {
+370.     return page_pfn ^ (1 << order);
+371. }
+372. ```
+373. EXACT XOR FORMULA CONFIRMED. ✓
+374. ---
+375. ASSERTION: Buddy must be same order, same zone, PageBuddy set.
+376. PROOF: File /usr/src/linux-source-6.8.0/mm/internal.h lines 347-366:
+377. ```c
+378. static inline bool page_is_buddy(struct page *page, struct page *buddy,
+379.                                  unsigned int order)
+380. {
+381.     if (!page_is_guard(buddy) && !PageBuddy(buddy))
+382.         return false;
+383.     if (buddy_order(buddy) != order)
+384.         return false;
+385.     if (page_zone_id(page) != page_zone_id(buddy))
+386.         return false;
+387.     VM_BUG_ON_PAGE(page_count(buddy) != 0, buddy);
+388.     return true;
+389. }
+390. ```
+391. CONDITIONS: (1) PageBuddy flag set, (2) same order, (3) same zone, (4) refcount=0. ✓
+392. ---
+393. ASSERTION: Kernel comment confirms B2 = B1 ^ (1 << O).
+394. PROOF: File /usr/src/linux-source-6.8.0/mm/internal.h lines 372-377:
+395. ```c
+396. /*
+397.  * 1) Any buddy B1 will have an order O twin B2 which satisfies
+398.  *    the following equation:
+399.  *        B2 = B1 ^ (1 << O)
+400.  *    For example, if the starting buddy (buddy2) is #8 its order
+401.  *    1 buddy is #10:
+402.  *        B2 = 8 ^ (1 << 1) = 8 ^ 2 = 10
+403.  */
+404. ```
+405. KERNEL COMMENT CONFIRMS XOR FORMULA WITH NUMERIC EXAMPLE. ✓
+406. ---
+407. ASSERTION: Parent PFN = child PFN AND ~(1 << order).
+408. PROOF: File /usr/src/linux-source-6.8.0/mm/internal.h lines 379-381:
+409. ```c
+410. /*
+411.  * 2) Any buddy B will have an order O+1 parent P which
+412.  *    satisfies the following equation:
+413.  *        P = B & ~(1 << O)
+414.  */
+415. ```
+416. PARENT FORMULA CONFIRMED. P = B AND NOT(1 << O). ✓
+417. ---
+418. ASSERTION: __free_one_page merges by incrementing order and looping.
+419. PROOF: File /usr/src/linux-source-6.8.0/mm/page_alloc.c lines 788-826:
+420. ```c
+421. while (order < MAX_PAGE_ORDER) {
+422.     buddy = find_buddy_page_pfn(page, pfn, order, &buddy_pfn);
+423.     if (!buddy)
+424.         goto done_merging;
+425.     del_page_from_free_list(buddy, zone, order);
+426.     combined_pfn = buddy_pfn & pfn;
+427.     page = page + (combined_pfn - pfn);
+428.     pfn = combined_pfn;
+429.     order++;
+430. }
+431. done_merging:
+432.     add_to_free_list(page, zone, order, migratetype);
+433. ```
+434. LOOP: Find buddy → if found, remove from list → combine → increment order → repeat. ✓
+435. ---
+436. ASSERTION: combined_pfn uses AND to get lower PFN.
+437. PROOF: Line 822: combined_pfn = buddy_pfn & pfn;
+438. EXAMPLE: 992 & 1000 = ?
+439. 992  = 1111100000
+440. 1000 = 1111101000
+441. AND  = 1111100000 = 992. Lower PFN. ✓
+442. ---
+443. ASSERTION: del_page_from_free_list decrements nr_free.
+444. PROOF: File /usr/src/linux-source-6.8.0/mm/page_alloc.c lines 698-709:
+445. ```c
+446. static inline void del_page_from_free_list(struct page *page, struct zone *zone,
+447.                                            unsigned int order)
+448. {
+449.     list_del(&page->buddy_list);
+450.     __ClearPageBuddy(page);
+451.     set_page_private(page, 0);
+452.     zone->free_area[order].nr_free--;
+453. }
+454. ```
+455. CONFIRMED: nr_free-- on remove. ✓
+456. ---
+457. ASSERTION: add_to_free_list increments nr_free.
+458. PROOF: File /usr/src/linux-source-6.8.0/mm/page_alloc.c lines 666-673:
+459. ```c
+460. static inline void add_to_free_list(struct page *page, struct zone *zone,
+461.                                     unsigned int order, int migratetype)
+462. {
+463.     struct free_area *area = &zone->free_area[order];
+464.     list_add(&page->buddy_list, &area->free_list[migratetype]);
+465.     area->nr_free++;
+466. }
+467. ```
+468. CONFIRMED: nr_free++ on add. ✓
+469. ---
+470. ASSERTION: Order stored in page_private when in buddy system.
+471. PROOF: File /usr/src/linux-source-6.8.0/mm/page_alloc.c lines 609-613:
+472. ```c
+473. static inline void set_buddy_order(struct page *page, unsigned int order)
+474. {
+475.     set_page_private(page, order);
+476.     __SetPageBuddy(page);
+477. }
+478. ```
+479. CONFIRMED: page_private stores order. PageBuddy flag marks page as in buddy system. ✓
+480. ---
+481. ASSERTION: buddy_order retrieves order from page_private.
+482. PROOF: File /usr/src/linux-source-6.8.0/mm/internal.h lines 315-319:
+483. ```c
+484. static inline unsigned int buddy_order(struct page *page)
+485. {
+486.     /* PageBuddy() must be checked by the caller */
+487.     return page_private(page);
+488. }
+489. ```
+490. CONFIRMED: Order read from page_private. ✓
+491. ---
+492. ASSERTION: __free_pages requires order parameter.
+493. PROOF: File /usr/src/linux-source-6.8.0/include/linux/gfp.h line 310:
+494. ```c
+495. extern void __free_pages(struct page *page, unsigned int order);
+496. ```
+497. CONFIRMED: User MUST pass order. Kernel does not auto-detect. ✓
+498. ---
+499. ASSERTION: __free_page macro sets order=0.
+500. PROOF: File /usr/src/linux-source-6.8.0/include/linux/gfp.h line 327:
+501. ```c
+502. #define __free_page(page) __free_pages((page), 0)
+503. ```
+504. CONFIRMED: Single page free uses order=0. ✓
+505. ---
+506. ASSERTION: alloc_page macro sets order=0.
+507. PROOF: File /usr/src/linux-source-6.8.0/include/linux/gfp.h line 288:
+508. ```c
+509. #define alloc_page(gfp_mask) alloc_pages(gfp_mask, 0)
+510. ```
+511. CONFIRMED: Single page alloc uses order=0. ✓
+512. ---
+513. ASSERTION: MAX_PAGE_ORDER limits merge recursion.
+514. PROOF: File /usr/src/linux-source-6.8.0/mm/page_alloc.c line 788:
+515. ```c
+516. while (order < MAX_PAGE_ORDER) {
+517. ```
+518. CONFIRMED: Loop stops when order reaches MAX_PAGE_ORDER (typically 10). ✓
+519. ---
+520. ALL ASSERTIONS PROVEN FROM SOURCE CODE.
+521. ---
