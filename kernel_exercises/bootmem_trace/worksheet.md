@@ -72,6 +72,10 @@ After completing this worksheet, you will be able to:
 15. FORMULA: PFN = byte_address ÷ 4096. WHY? Each page has 4096 bytes. Page 0 = bytes 0-4095. Page 1 = bytes 4096-8191. Page N = bytes N×4096 to (N+1)×4096-1.
 16. EXAMPLE: Byte address 8000. PFN = 8000 ÷ 4096 = 1 (integer division). Verify: Page 1 = bytes 4096-8191. 8000 is in range 4096-8191. ✓
 17. FORMULA: Physical address = PFN × 4096. WHY? First byte of page N is at address N × 4096.
+17a. DEFINITION: phys_addr_t = kernel type for physical addresses. Source: /usr/src/linux-source-6.8.0/include/linux/types.h.
+17b. CODE: #ifdef CONFIG_PHYS_ADDR_T_64BIT → typedef u64 phys_addr_t; #else → typedef u32 phys_addr_t;
+17c. THIS MACHINE: x86_64 → CONFIG_PHYS_ADDR_T_64BIT=y → phys_addr_t = u64 = unsigned long long = 8 bytes = 64 bits.
+17d. INCLUDED VIA: #include <linux/mm.h> → includes <linux/types.h> → phys_addr_t available.
 18. EXAMPLE: PFN 5. Physical address = 5 × 4096 = 20480. Verify: Page 5 = bytes 20480-24575. First byte = 20480. ✓
 19. CALCULATION: Total pages = 16154906624 bytes ÷ 4096 bytes/page. Calculate by hand: 16154906624 ÷ 4096.
 20. CALCULATION: 16154906624 ÷ 4096 = 16154906624 ÷ 4 ÷ 1024 = 4038726656 ÷ 1024 = 3944069 pages. This machine has 3944069 pages.
