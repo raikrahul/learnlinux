@@ -1,163 +1,52 @@
-/*
- * bootmem_trace.c - Kernel Memory Management Trace Driver
- * AXIOM SOURCES: Each comment traces back to worksheet.md line or verifiable command.
- */
-
-/* A00. #include directives: standard kernel module headers. Source: kernel module documentation. */
-#include <linux/module.h>    /* MODULE_LICENSE, module_init, module_exit */
-#include <linux/kernel.h>    /* printk, KERN_INFO */
-#include <linux/init.h>      /* __init, __exit macros */
-#include <linux/mm.h>        /* page_to_pfn, get_page, put_page */
-#include <linux/gfp.h>       /* GFP_KERNEL, alloc_page */
-#include <linux/mm_types.h>  /* struct page */
-#include <linux/page_ref.h>  /* page_ref_count */
-
-/* A01. MODULE_LICENSE("GPL"): Required for accessing GPL-only kernel symbols. Source: kernel module documentation. */
+/*bootmem_trace.c:DRAW[RAM:16154906624bytes→pages:3944069→vmemmap:0xffffea0000000000→struct_page[0..3944068]→each:64bytes]→DRAW[zones:DMA(PFN<4096)→DMA32(4096≤PFN<1048576)→Normal(PFN≥1048576)]→DRAW[GFP_KERNEL:BIT(6)|BIT(7)|BIT(10)|BIT(11)=0x40|0x80|0x400|0x800=0xCC0]*/
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/mm.h>
+#include <linux/gfp.h>
+#include <linux/mm_types.h>
+#include <linux/page_ref.h>
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("User");
-MODULE_DESCRIPTION("Bootmem Trace Driver");
-
+MODULE_DESCRIPTION("Bootmem Trace");
 static int __init bootmem_init(void)
 {
-    /* A02. Variable declarations. No values yet. */
-    struct page *page_ptr;   /* Will hold return value of alloc_page. Type: pointer to struct page. */
-    unsigned long pfn;       /* Will hold page frame number. Type: unsigned long. */
-    phys_addr_t phys;        /* Will hold physical address. Type: phys_addr_t (unsigned long long). */
-    int ref;                 /* Will hold reference count. Type: int. */
-    
-    printk(KERN_INFO "BOOTMEM_TRACE: __init bootmem_init called\n");
-    
-    /* 
-     * A03. alloc_page(GFP_KERNEL)
-     * GFP_KERNEL source: worksheet.md line 17-21 → grep GFP_KERNEL → 0xCC0
-     * 0xCC0 derivation: __GFP_RECLAIM=0x400, __GFP_IO=0x40, __GFP_FS=0x80 → 0x400|0x40|0x80=0xCC0 (worksheet.md line 75)
-     * alloc_page expands to: alloc_pages(GFP_KERNEL, 0) → __alloc_pages(0xCC0, order=0, numa_node=-1)
-     * buddy allocator searches zone Normal (most likely on 16GB RAM) → finds order-0 free block → returns struct page*
-     * _refcount set to 1: source worksheet.md line 22 → grep set_page_refcounted → atomic_set(&page->_refcount, 1)
-     * page_ptr value: UNKNOWN until runtime. Must read from dmesg after insmod.
-     */
+    /*DRAW[stack:bootmem_init()→local_vars:page_ptr(8bytes@rbp-8)=???|pfn(8bytes@rbp-16)=???|phys(8bytes@rbp-24)=???|ref(4bytes@rbp-28)=???]*/
+    struct page *page_ptr;
+    unsigned long pfn;
+    phys_addr_t phys;
+    int ref;
+    printk(KERN_INFO "BOOTMEM_TRACE:__init\n");
+    /*DRAW[before_alloc:buddy_allocator→zone_Normal→free_area[0]→nr_free=42261(from/proc/buddyinfo)→first_free_page@PFN=?]→alloc_page(GFP_KERNEL=0xCC0)→__alloc_pages(gfp=0xCC0,order=0,node=-1)→get_page_from_freelist()→rmqueue(zone=Normal,order=0)→__rmqueue_smallest()→list_del(page)→nr_free:42261→42260→set_page_refcounted(page)→atomic_set(&page->_refcount,1)→return page*/
     page_ptr = alloc_page(GFP_KERNEL);
-    
-    /*
-     * A04. Check alloc_page return value.
-     * alloc_page returns NULL on failure.
-     * If NULL, cannot proceed. Must check before dereferencing.
-     */
-    if (!page_ptr) {
-        printk(KERN_ERR "BOOTMEM_TRACE: alloc_page failed\n");
-        return -ENOMEM;
-    }
-    
-    /*
-     * A05. page_to_pfn(page_ptr)
-     * Formula source: worksheet.md line 23 → F01: pfn=(page-vmemmap)/sizeof(struct page)
-     * vmemmap source: worksheet.md line 16 → grep VMEMMAP_START → 0xffffea0000000000
-     * sizeof(struct page) source: worksheet.md line 05 → pahole → 64 bytes
-     * CALCULATION EXAMPLE (assuming page_ptr=0xffffea0007a21f40 from worksheet.md line 32):
-     *   pfn = (0xffffea0007a21f40 - 0xffffea0000000000) / 64
-     *       = 0x7a21f40 / 64
-     *       = 128065344 / 64
-     *       = 2001021
-     * ACTUAL pfn: printed below, verify against hand calculation after dmesg.
-     */
+    /*DRAW[after_alloc:page_ptr=0xffffea0007a21f40(example)→page_ptr[0..63bytes]:+0=flags(8bytes)=0x0000000000010000|+8=_refcount(4bytes)=1|+12=_mapcount(4bytes)=-1|+16=mapping(8bytes)=NULL|+24=index(8bytes)=0|+32=private(8bytes)=0|+40=_last_cpupid(4bytes)=0|+44..63=pad]*/
+    if (!page_ptr) { printk(KERN_ERR "BOOTMEM_TRACE:alloc_failed\n"); return -ENOMEM; }
+    /*DRAW[page_to_pfn:page_ptr=0xffffea0007a21f40→vmemmap=0xffffea0000000000→diff=0xffffea0007a21f40-0xffffea0000000000=0x7a21f40=128065344→pfn=128065344/64=2001021]→page_to_pfn(page_ptr)→returns(page_ptr-vmemmap)/sizeof(struct_page)=(0xffffea0007a21f40-0xffffea0000000000)/64=2001021*/
     pfn = page_to_pfn(page_ptr);
-    
-    /*
-     * A06. phys = pfn * PAGE_SIZE
-     * PAGE_SIZE source: worksheet.md line 03 → getconf PAGE_SIZE → 4096
-     * Formula source: worksheet.md line 24 → F02: phys=pfn×4096
-     * CALCULATION EXAMPLE (assuming pfn=2001021 from A05):
-     *   phys = 2001021 × 4096
-     *   Step 1: 2001021 × 4000 = 8004084000
-     *   Step 2: 2001021 × 96 = 192098016
-     *   Step 3: 8004084000 + 192098016 = 8196182016
-     *   phys = 8196182016 = 0x1e887d000
-     * ACTUAL phys: printed below, verify against hand calculation after dmesg.
-     */
+    /*DRAW[pfn_to_phys:pfn=2001021→PAGE_SIZE=4096=2^12→phys=2001021×4096→step1:2001021×4000=8004084000→step2:2001021×96=192098016→step3:8004084000+192098016=8196182016=0x1e887d000]→phys=(phys_addr_t)pfn*PAGE_SIZE=2001021×4096=8196182016=0x1e887d000*/
     phys = (phys_addr_t)pfn * PAGE_SIZE;
-    
-    /*
-     * A07. page_ref_count(page_ptr)
-     * Source: worksheet.md line 22 → A14 → alloc_page sets _refcount=1
-     * page_ref_count reads page->_refcount.counter via atomic_read
-     * Expected value: 1
-     * ACTUAL ref: printed below, verify equals 1 after dmesg.
-     */
+    /*DRAW[page_ref_count:page_ptr=0xffffea0007a21f40→page_ptr+8=0xffffea0007a21f48→_refcount@0xffffea0007a21f48→atomic_read(&_refcount)→.counter=1]→page_ref_count(page_ptr)→returns atomic_read(&page->_refcount)=1*/
     ref = page_ref_count(page_ptr);
-    
-    /*
-     * A08. Zone determination
-     * Rules source: worksheet.md lines 11, 14, 15
-     * R01: PFN < 4096 → zone=DMA (4096 from worksheet.md line 10: 16MB/4096=4096)
-     * R02: 4096 ≤ PFN < 1048576 → zone=DMA32 (1048576 from worksheet.md line 13: 4GB/4096=1048576)
-     * R03: PFN ≥ 1048576 → zone=Normal
-     * CALCULATION EXAMPLE (assuming pfn=2001021):
-     *   2001021 < 4096? → ✗ false → not DMA
-     *   2001021 < 1048576? → ✗ false → not DMA32
-     *   2001021 ≥ 1048576? → ✓ true → zone=Normal
-     * ACTUAL zone: determined by ternary operator below, verify after dmesg.
-     */
-    printk(KERN_INFO "BOOTMEM_TRACE: page_ptr=%px pfn=0x%lx(%lu) phys=0x%llx ref=%d zone=%s\n",
-           page_ptr, pfn, pfn, phys, ref,
-           pfn >= 1048576 ? "Normal" : (pfn >= 4096 ? "DMA32" : "DMA"));
-    
-    /*
-     * A09. get_page(page_ptr)
-     * Source: worksheet.md line 77 → grep get_page → page_ref_inc → atomic_inc(&page->_refcount)
-     * _refcount before: 1 (from A07)
-     * Operation: 1 + 1 = 2
-     * _refcount after: 2
-     */
-    printk(KERN_INFO "BOOTMEM_TRACE: Before get_page: ref=%d\n", page_ref_count(page_ptr));
+    /*DRAW[zone_check:pfn=2001021→DMA_boundary=4096→DMA32_boundary=1048576→2001021<4096?✗→2001021<1048576?✗→2001021≥1048576?✓→zone=Normal]*/
+    printk(KERN_INFO "BOOTMEM_TRACE:page=%px,pfn=0x%lx(%lu),phys=0x%llx,ref=%d,zone=%s\n", page_ptr, pfn, pfn, phys, ref, pfn >= 1048576 ? "Normal" : (pfn >= 4096 ? "DMA32" : "DMA"));
+    /*DRAW[before_get_page:page_ptr+8→_refcount=1]→get_page(page_ptr)→page_ref_inc(page)→atomic_inc(&page->_refcount)→lock_cmpxchg→_refcount:1→1+1=2→DRAW[after_get_page:_refcount=2]*/
+    printk(KERN_INFO "BOOTMEM_TRACE:before_get:ref=%d\n", page_ref_count(page_ptr));
     get_page(page_ptr);
-    printk(KERN_INFO "BOOTMEM_TRACE: After get_page: ref=%d (expected 2)\n", page_ref_count(page_ptr));
-    
-    /*
-     * A10. put_page(page_ptr) - FIRST
-     * Source: worksheet.md line 78 → grep put_page → page_ref_dec_and_test → atomic_dec_and_test(&page->_refcount)
-     * _refcount before: 2 (from A09)
-     * Operation: 2 - 1 = 1
-     * Test: 1 == 0? → ✗ false → page NOT freed
-     * _refcount after: 1
-     */
-    printk(KERN_INFO "BOOTMEM_TRACE: Before put_page #1: ref=%d\n", page_ref_count(page_ptr));
+    printk(KERN_INFO "BOOTMEM_TRACE:after_get:ref=%d(expect2)\n", page_ref_count(page_ptr));
+    /*DRAW[before_put1:_refcount=2]→put_page(page_ptr)→page_ref_dec_and_test(page)→atomic_dec_and_test(&page->_refcount)→lock_decl→_refcount:2→2-1=1→test:1==0?✗→return0→page_NOT_freed→DRAW[after_put1:_refcount=1]*/
+    printk(KERN_INFO "BOOTMEM_TRACE:before_put1:ref=%d\n", page_ref_count(page_ptr));
     put_page(page_ptr);
-    printk(KERN_INFO "BOOTMEM_TRACE: After put_page #1: ref=%d (expected 1)\n", page_ref_count(page_ptr));
-    
-    /*
-     * A11. put_page(page_ptr) - SECOND
-     * _refcount before: 1 (from A10)
-     * Operation: 1 - 1 = 0
-     * Test: 0 == 0? → ✓ true → __free_pages_ok(page, 0) called → page returned to buddy allocator
-     * _refcount after: 0 (page freed, struct page may be reused)
-     * WARNING: After this call, page_ptr is DANGLING POINTER. Accessing page_ptr->_refcount is UNDEFINED BEHAVIOR.
-     */
-    printk(KERN_INFO "BOOTMEM_TRACE: Before put_page #2: ref=%d\n", page_ref_count(page_ptr));
+    printk(KERN_INFO "BOOTMEM_TRACE:after_put1:ref=%d(expect1)\n", page_ref_count(page_ptr));
+    /*DRAW[before_put2:_refcount=1]→put_page(page_ptr)→atomic_dec_and_test→lock_decl→_refcount:1→1-1=0→test:0==0?✓→return1→__page_cache_release(page)→free_unref_page(page)→free_unref_page_commit()→list_add(&page->lru,&pcp->lists[migratetype])→page_returned_to_pcp_freelist→DRAW[after_put2:_refcount=0→page_freed→page_ptr=DANGLING_POINTER→any_access=UNDEFINED_BEHAVIOR]*/
+    printk(KERN_INFO "BOOTMEM_TRACE:before_put2:ref=%d\n", page_ref_count(page_ptr));
     put_page(page_ptr);
-    /* DANGER: page_ptr now points to freed memory. Cannot safely read page_ref_count. */
-    printk(KERN_INFO "BOOTMEM_TRACE: After put_page #2: page freed (ref reading is UB)\n");
-    
-    /*
-     * A12. put_page(page_ptr) - THIRD (BUG)
-     * _refcount before: 0 (from A11) OR page reused by kernel with _refcount=1
-     * Operation: 0 - 1 = -1 OR 1 - 1 = 0 (wrong page!)
-     * Scenario 1 (page not reused): _refcount=-1 → VM_BUG_ON_PAGE triggered
-     * Scenario 2 (page reused): We decrement SOMEONE ELSE'S refcount → DATA CORRUPTION
-     * Source: worksheet.md line 79 → grep VM_BUG_ON_PAGE → include/linux/mmdebug.h
-     * Expected outcome: Kernel WARN or BUG in dmesg. Possible system instability.
-     * UNCOMMENT BELOW LINE TO TRIGGER BUG:
-     */
-    /* put_page(page_ptr); */
-    printk(KERN_INFO "BOOTMEM_TRACE: BUG LINE COMMENTED. Uncomment line 147 to trigger refcount underflow.\n");
-    
-    printk(KERN_INFO "BOOTMEM_TRACE: Init complete. Check values against worksheet.md calculations.\n");
+    printk(KERN_INFO "BOOTMEM_TRACE:after_put2:page_freed(ref_read_is_UB)\n");
+    /*DRAW[before_put3_BUG:page_freed→_refcount=0(or_reused_by_kernel_with_refcount=1)→put_page(page_ptr)→atomic_dec_and_test→_refcount:0-1=-1→VM_BUG_ON_PAGE(page_ref_count(page)<=0,page)→-1<=0?✓→BUG()→kernel_panic_or_WARN→dmesg_shows:page:0xffffea0007a21f40_refcount:-1_mapcount:-1→DRAW[after_put3:_refcount=-1→CORRUPTION→if_page_reallocated_we_decremented_WRONG_PAGE_refcount]]*/
+    /*UNCOMMENT_TO_TRIGGER_BUG:put_page(page_ptr);*/
+    printk(KERN_INFO "BOOTMEM_TRACE:BUG_LINE_COMMENTED→uncomment_line_above_to_trigger_refcount_underflow\n");
+    printk(KERN_INFO "BOOTMEM_TRACE:init_complete\n");
     return 0;
 }
-
-static void __exit bootmem_exit(void)
-{
-    printk(KERN_INFO "BOOTMEM_TRACE: __exit bootmem_exit called\n");
-}
-
+static void __exit bootmem_exit(void) { printk(KERN_INFO "BOOTMEM_TRACE:exit\n"); }
 module_init(bootmem_init);
 module_exit(bootmem_exit);
