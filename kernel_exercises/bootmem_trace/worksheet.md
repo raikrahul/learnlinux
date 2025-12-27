@@ -195,21 +195,219 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 155. Q(line52): WHO ARE USERS OF _REFCOUNT? ANSWER: USER_1: kernel allocates page for process heap → refcount=1. USER_2: kernel maps SAME page to another process (shared memory) → get_page() → refcount=2. USER_3: kernel uses page for page cache (file backed) → refcount=3. DRAW: [struct page]→_refcount=3→[process_A:mmap][process_B:mmap][page_cache]. When each user finishes → put_page() → refcount:3→2→1→0→freed.
 156. Q(line53): TRACE MALLOC TO ALLOC_PAGE. DRAW: user_calls_malloc(4096)→libc_malloc→brk()/mmap()syscall→kernel:do_brk_flags()/do_mmap()→vm_area_alloc()→page_fault_later→handle_mm_fault()→do_anonymous_page()→alloc_page(GFP_HIGHUSER_MOVABLE)→__alloc_pages()→get_page_from_freelist()→rmqueue()→page_returned→set_pte_at()→update_PML4/PDPT/PD/PT→user_gets_virtual_address. 100 processes = 100 independent paths, same function chain.
 157. Q(line54-55): WHY GET INCREMENTS AND PUT DECREMENTS? NAMING CONFUSION. get_page = "I am getting/acquiring this page" → refcount++ (I am now a user). put_page = "I am putting back/releasing this page" → refcount-- (I am no longer a user). NOT get=read, put=write. Think: get=take, put=give_back.
-158. Q(line56): WHAT IS BUDDY ALLOCATOR? DEFINITION: Algorithm to manage free pages. PROBLEM: Need to find N contiguous pages quickly. SOLUTION: Group pages by size=2^order. order=0→1page, order=1→2pages, order=2→4pages, ..., order=10→1024pages. DRAW: /proc/buddyinfo shows: Normal 42261 21273 5560 1477 855 373 103 27 16 19 2. MEANING: 42261 free blocks of 1 page, 21273 free blocks of 2 pages, ..., 2 free blocks of 1024 pages. "returned to buddy" = page put back into appropriate free list.
-159. Q(line57): CHECKS FOR DOUBLE-FREE? ANSWER: YES, kernel has checks. VM_BUG_ON_PAGE(page_ref_count(page) <= 0, page) → if refcount ≤ 0 → BUG(). User-space free() calls kernel munmap() → kernel checks page_mapcount/refcount BEFORE decrementing. User-space cannot directly call put_page(). Only kernel can. Kernel assumes kernel code is correct. Kernel driver bugs CAN cause double-free → panic.
-160. Q(line58-67): WHY GFP FLAGS? PROBLEM: alloc_page() can fail. What to do? SCENARIO_1: In interrupt handler → CANNOT sleep → CANNOT wait for memory → use GFP_ATOMIC=0x0. SCENARIO_2: In process context → CAN sleep → CAN reclaim memory from disk cache → use GFP_KERNEL=0xCC0. DRAW: GFP_KERNEL bits: [bit6=can_do_IO][bit7=can_use_FS][bit10=can_direct_reclaim][bit11=can_kswapd_reclaim]. ∴ GFP_KERNEL = permission bitmask = what allocator is ALLOWED to do if memory is low. At boot time: plenty of RAM → flags don't matter. At runtime: RAM full → flags control reclaim behavior.
-161. Q(line68): ALLOCATES FROM WHERE? ANSWER: Buddy allocator maintains FREE LISTS. Boot: memblock gives all RAM to buddy → buddy builds free lists. alloc_page() → removes page from free list → gives to caller. NOT "already allocated at boot". Boot ORGANIZES, runtime DISTRIBUTES. DRAW: boot→[RAM=all_pages]→memblock→[buddy_free_lists]→runtime→alloc_page()→[page removed from list]→put_page()→[page returned to list].
-162. Q(line70): WHAT IF TWO CALL PAGE_REF_COUNT TOGETHER? ANSWER: page_ref_count() uses atomic_read(). atomic_read() is LOCK-FREE read on x86. Multiple CPUs can read simultaneously. No race condition for READ. For WRITE (get_page/put_page): uses atomic_inc/atomic_dec → CPU instruction LOCK prefix → hardware ensures atomicity.
-163. Q(line71): BUT ALLOC_PAGE ALREADY SET REFCOUNT=1? ANSWER: get_page() is for SECOND user. SCENARIO: Process_A calls alloc_page() → refcount=1. Process_A shares page with Process_B → get_page() → refcount=2. Both A and B now have reference. When A done → put_page() → refcount=1. When B done → put_page() → refcount=0 → freed. WITHOUT get_page(): A shares with B, A calls put_page() → refcount=0 → FREED while B still using → CRASH.
-164. Q(line72): WHAT IF PUT_PAGE ON ILLEGAL PAGE? ANSWER: put_page(NULL) → NULL pointer dereference → kernel OOPS. put_page(invalid_address) → page_ref_dec_and_test reads garbage → undefined behavior. put_page(freed_page) → refcount goes negative OR corrupts re-allocated page → BUG_ON or silent corruption. Kernel does NOT validate page pointer. Assume caller is correct. Driver bug = kernel bug = panic.
-165. Q(line77): TYPECAST AND CR3 RELATION? DRAW: pfn=123→phys=123×4096=503808=0x7B000→this_is_RAM_bus_address. (phys_addr_t) = cast to unsigned long long = 64-bit integer. phys is JUST A NUMBER, not a pointer. CANNOT dereference phys directly. To access RAM at phys: virt=__va(phys)=phys+PAGE_OFFSET=0x7B000+0xFFFF888000000000=0xFFFF88800007B000 → NOW can dereference. CR3 relation: CR3 register holds ROOT of page tables (PML4). Page table entries contain PFN. PFN×4096=physical_address_of_next_table_or_page. MMU uses PFN, kernel uses PFN, allocator tracks PFN.
-166. Q(line78): TYPE OF REF? ANSWER: ref type = int = 4 bytes = signed 32-bit. page_ptr type = struct page * = 8 bytes = pointer. WHY care? You are learning what kernel tracks. ref=1 means 1 user. ref=0 means free. Type tells you range: int can be -2B to +2B. refcount > 2B users = impossible = overflow check.
-167. Q(line79): PFN RANGE VS PML4 INDEXING? THESE ARE DIFFERENT THINGS. PML4 indexing: virtual_address[47:39]=PML4_index, [38:30]=PDPT_index, [29:21]=PD_index, [20:12]=PT_index, [11:0]=offset. This gives VIRTUAL address translation. PFN and zones: physical_address/4096=PFN. Zone tells allocator WHERE in RAM. RELATION: PT_entry contains PFN. DRAW: user_virtual_0x7FFFFFFF000→PML4[255]→PDPT[511]→PD[511]→PT[4095]→PTE_contains_PFN=123→physical=0x7B000. Zone of PFN 123: 123<4096→ZONE_DMA. PML4 indexing finds physical page. Zone tells allocator which freelist to use.
-168. ---
-169. PROGRESS STATUS
-170. ---
-171. DONE: worksheet lines 1-144 definitions/calculations. DONE: bootmem_trace.c compiled. DONE: error report appended. DONE: questions answered lines 147-167.
-172. PENDING: Run module (insmod), observe dmesg, compare observed PFN with predictions, verify refcount transitions.
-173. PENDING: Uncomment bug line, trigger refcount underflow, observe kernel warning/panic.
-174. PENDING: git push (authentication issue from terminal).
-175. ---
+158. Q(line56): WHAT IS BUDDY ALLOCATOR? FROM SCRATCH DERIVATION:
+159. AXIOM: RAM on this machine = 16154906624 bytes (line 08). Pages = 3944069 (line 20). Each page = 4096 bytes (line 12).
+160. PROBLEM: Kernel needs 8 contiguous pages. How to find them fast?
+161. NAIVE SOLUTION: Search all 3944069 pages one by one. Trace:
+162. Step 1: Check page[0]. Free? Yes. Counter=1.
+163. Step 2: Check page[1]. Free? Yes. Counter=2.
+164. ...
+165. Step N: Check page[N]. Free? No. Counter reset to 0. Start over.
+166. Worst case: Check all 3944069 pages. Steps = 3944069. SLOW.
+167. DEFINITION: STEPS = number of operations CPU performs. More steps = more time.
+168. QUESTION: Can we reduce steps? From 3944069 to something smaller?
+169. INSIGHT: If we ALREADY KNOW where 8-page blocks are, we don't need to search.
+170. SOLUTION: BEFORE anyone asks, group pages by size. Store POINTERS to groups.
+171. DEFINITION: LIST = chain of items. Each item points to next item. First item called HEAD.
+172. DRAW: HEAD → [block_0] → [block_1] → [block_2] → ... → [block_N] → NULL
+173. DEFINITION: free_area[order] = list of free blocks of size 2^order pages.
+174. DRAW: free_area[0] = list of 1-page blocks. free_area[1] = list of 2-page blocks. ... free_area[10] = list of 1024-page blocks.
+175. ALLOCATION WITH LISTS: Need 8 pages. 8 = 2^3. Look at free_area[3].
+176. Step 1: Check free_area[3].HEAD. Not NULL? Block exists. Take it.
+177. Steps = 1. Compare: naive = 3944069 steps. Lists = 1 step. Speedup = 3944069 / 1 = 3944069×.
+178. COST OF LISTS: Must maintain 11 lists. When page freed, add to list. When page allocated, remove from list. CONSTANT time operations.
+179. DEFINITION: ORDER = index of free_area array. order=0 → blocks of 2^0=1 page. order=1 → blocks of 2^1=2 pages. order=N → blocks of 2^N pages.
+164. CALCULATION: 2^0=1. 2^1=2. 2^2=4. 2^3=8. 2^4=16. 2^5=32. 2^6=64. 2^7=128. 2^8=256. 2^9=512. 2^10=1024. ✓
+165. AXIOM: MAX_ORDER=11 in Linux kernel. Largest block = 2^(11-1) = 2^10 = 1024 pages = 1024×4096 = 4194304 bytes = 4 MB.
+166. SOURCE: cat /proc/buddyinfo → output for this machine RIGHT NOW:
+167. DMA:    0   1   0   0   0   0   0   0   1   2   2
+168. DMA32:  25048 17037 9805 4738 1572 406 90 14 10 26 123
+169. Normal: 25281 22621 4377 854 383 177 78 40 9 6 3
+170. MEANING: Each column = one order. Column 0 = order 0. Column 1 = order 1. ... Column 10 = order 10.
+171. DRAW Normal zone: order[0]=25281 blocks × 1 page = 25281 pages. order[1]=22621 blocks × 2 pages = 45242 pages. order[2]=4377 blocks × 4 pages = 17508 pages. ...
+172. CALCULATION: Total free pages in Normal zone:
+173. order[0]: 25281 × 2^0 = 25281 × 1 = 25281
+174. order[1]: 22621 × 2^1 = 22621 × 2 = 45242
+175. order[2]: 4377 × 2^2 = 4377 × 4 = 17508
+176. order[3]: 854 × 2^3 = 854 × 8 = 6832
+177. order[4]: 383 × 2^4 = 383 × 16 = 6128
+178. order[5]: 177 × 2^5 = 177 × 32 = ?. CALCULATE: 177×30=5310. 177×2=354. 5310+354=5664. ✓
+179. order[6]: 78 × 2^6 = 78 × 64 = ?. CALCULATE: 78×60=4680. 78×4=312. 4680+312=4992. ✓
+180. order[7]: 40 × 2^7 = 40 × 128 = ?. CALCULATE: 40×100=4000. 40×28=1120. 4000+1120=5120. ✓
+181. order[8]: 9 × 2^8 = 9 × 256 = ?. CALCULATE: 9×256=9×200+9×56=1800+504=2304. ✓
+182. order[9]: 6 × 2^9 = 6 × 512 = ?. CALCULATE: 6×500=3000. 6×12=72. 3000+72=3072. ✓
+183. order[10]: 3 × 2^10 = 3 × 1024 = ?. CALCULATE: 3×1000=3000. 3×24=72. 3000+72=3072. ✓
+184. TOTAL NORMAL: 25281+45242+17508+6832+6128+5664+4992+5120+2304+3072+3072 = ?
+185. STEP: 25281+45242=70523. 70523+17508=88031. 88031+6832=94863. 94863+6128=100991. 100991+5664=106655. 106655+4992=111647. 111647+5120=116767. 116767+2304=119071. 119071+3072=122143. 122143+3072=125215. TOTAL=125215 pages.
+186. VERIFY BYTES: 125215×4096=?. CALCULATE: 125215×4000=500860000. 125215×96=12020640. 500860000+12020640=512880640 bytes.
+187. VERIFY MB: 512880640÷1048576=?. CALCULATE: 512880640÷1048576=489.17 MB. ≈489 MB free.
+188. ---
+189. PUNISHMENT CALCULATION: HARD EXAMPLE
+190. ---
+191. PROBLEM: DMA32 zone has order[10]=123 blocks. Each block=1024 pages. Total pages at order[10]=?
+192. CALCULATE: 123×1024=?. 123×1000=123000. 123×24=2952. 123000+2952=125952 pages at order[10] in DMA32.
+193. BYTES: 125952×4096=?. CALCULATE: 125952×4000=503808000. 125952×96=12091392. 503808000+12091392=515899392 bytes.
+194. MB: 515899392÷1048576=?. CALCULATE: 515899392÷1000000=515.899. Adjust for 1048576: 515899392÷1048576=492.06 MB at order[10].
+195. COMPARE: Normal zone order[10]=3 blocks=3072 pages=12582912 bytes=12 MB. DMA32 order[10]=123 blocks=125952 pages=515899392 bytes=492 MB. Ratio=492/12=41×.
+196. ---
+197. EDGE CASE: SPLITTING CALCULATION
+198. ---
+199. PROBLEM: Need 1 page (order=0). order[0] list empty. order[1] has 1 block (2 pages). What happens?
+200. STEP1: Check order[0]. count=0. Empty.
+201. STEP2: Check order[1]. count=1. Take block. Block has 2 pages at PFN=1000.
+202. STEP3: Split. 2 pages→1 page + 1 page. Give PFN=1000 to caller. Put PFN=1001 in order[0] list.
+203. AFTER: order[0] count=1. order[1] count=0.
+204. ---
+205. HARDER EDGE: MULTI-LEVEL SPLIT
+206. ---
+207. PROBLEM: Need 1 page. order[0]=0. order[1]=0. order[2]=0. order[3]=1 block at PFN=1000 (8 pages).
+208. STEP1: order[0]=0. Check order[1]=0. Check order[2]=0. Check order[3]=1.
+209. STEP2: Take order[3] block. 8 pages at PFN=1000-1007.
+210. STEP3: Split→4+4. Give first 4 (PFN=1000-1003) to order[2]? NO. We need order[0]. Keep splitting.
+211. STEP4: 4 pages at PFN=1000-1003 splits→2+2. Put PFN=1002-1003 in order[1]. Continue with PFN=1000-1001.
+212. STEP5: 2 pages at PFN=1000-1001 splits→1+1. Put PFN=1001 in order[0]. Give PFN=1000 to caller.
+213. STEP6: Remaining 4 pages at PFN=1004-1007 goes to order[2].
+214. AFTER: order[0]=1 (PFN=1001). order[1]=1 (PFN=1002-1003). order[2]=1 (PFN=1004-1007). order[3]=0.
+215. VERIFY: 1+2+4+0=7 pages in lists. 1 page given to caller. 7+1=8 pages. Original order[3]=8 pages. ✓
+216. ---
+217. BIT PATTERN CALCULATION: BUDDY XOR
+218. ---
+219. PROBLEM: PFN=1000, order=3. Find buddy. Verify with bits.
+220. PFN=1000 in binary: 1000÷2=500r0. 500÷2=250r0. 250÷2=125r0. 125÷2=62r1. 62÷2=31r0. 31÷2=15r1. 15÷2=7r1. 7÷2=3r1. 3÷2=1r1. 1÷2=0r1. Read bottom-up: 1111101000.
+221. VERIFY: 1111101000 = 512+256+128+64+32+0+8+0+0+0 = 512+256+128+64+32+8 = 1000. ✓
+222. XOR MASK: 1<<3 = 8 = 1000 in binary = 0000001000 (10 bits).
+223. XOR: 1111101000 XOR 0000001000 = ?. Bit by bit: 1^0=1. 1^0=1. 1^0=1. 1^0=1. 1^0=1. 0^0=0. 1^1=0. 0^0=0. 0^0=0. 0^0=0. Result: 1111100000.
+224. CONVERT: 1111100000 = 512+256+128+64+32+0+0+0+0+0 = 992. Buddy PFN=992. ✓
+225. REVERSE: buddy=992, order=3. 992 XOR 8 = ?. 992=1111100000. 8=0000001000. XOR=1111101000=1000. ✓
+226. ---
+227. FRACTIONAL EDGE: NON-POWER-OF-2 REQUEST
+228. ---
+229. PROBLEM: User needs 5 pages. 5 is NOT power of 2. What order?
+230. CALCULATE: 2^2=4<5. 2^3=8≥5. Must use order=3 (8 pages). Waste=8-5=3 pages. Fragmentation.
+231. PROBLEM: User needs 1000 pages. What order?
+232. CALCULATE: 2^9=512<1000. 2^10=1024≥1000. Must use order=10. Waste=1024-1000=24 pages.
+233. PROBLEM: User needs 1025 pages. What order?
+234. CALCULATE: 2^10=1024<1025. 2^11=2048≥1025. But MAX_ORDER=11→max block=1024. CANNOT allocate 1025 contiguous pages with buddy.
+235. SOLUTION: Allocate 2 blocks: order[10]+order[0]. But NOT contiguous. Caller must handle.
+236. ---
+237. SCALE STRESS TEST: ALL ZONES
+238. ---
+239. DMA zone total pages: 0×1+1×2+0×4+0×8+0×16+0×32+0×64+0×128+1×256+2×512+2×1024=0+2+0+0+0+0+0+0+256+1024+2048=3330 pages.
+240. DMA32 zone total: 25048×1+17037×2+9805×4+4738×8+1572×16+406×32+90×64+14×128+10×256+26×512+123×1024=?
+241. STEP: 25048. 17037×2=34074. 25048+34074=59122.
+242. STEP: 9805×4=39220. 59122+39220=98342.
+243. STEP: 4738×8=37904. 98342+37904=136246.
+244. STEP: 1572×16=25152. 136246+25152=161398.
+245. STEP: 406×32=12992. 161398+12992=174390.
+246. STEP: 90×64=5760. 174390+5760=180150.
+247. STEP: 14×128=1792. 180150+1792=181942.
+248. STEP: 10×256=2560. 181942+2560=184502.
+249. STEP: 26×512=13312. 184502+13312=197814.
+250. STEP: 123×1024=125952. 197814+125952=323766 pages in DMA32.
+251. TOTAL ALL ZONES: 3330+323766+125215=452311 pages free on this machine.
+252. BYTES: 452311×4096=1852265456 bytes=1.72 GB free RAM.
+183. order[10]: 3 × 2^10 = 3 × 1024 = 3072
+184. TOTAL: 25281+45242+17508+6832+6128+5664+4992+5120+2304+3072+3072 = 125215 free pages in Normal zone.
+185. VERIFY: 125215 × 4096 = 512880640 bytes = 489 MB free in Normal zone.
+186. ALLOCATION EXAMPLE: Need 8 pages. 8 = 2^3 → order = 3. Look at order[3] list in Normal zone. Count = 854. Take 1 block. Now count = 853.
+187. DRAW BEFORE: free_area[3].nr_free = 854 → [block_0][block_1]...[block_853]
+188. DRAW AFTER: free_area[3].nr_free = 853 → [block_1][block_2]...[block_853]. block_0 given to caller.
+189. SPLITTING: Need 8 pages but order[3]=0 (empty). Look at order[4]. Take 1 block (16 pages). SPLIT: 16 pages → 8 pages + 8 pages. Give 8 to caller. Put 8 in order[3] list.
+190. DRAW: order[4] has [16-page block] → take → split → [8-page block to caller] + [8-page block to order[3]]
+191. MERGING (on free): FROM SCRATCH DERIVATION:
+192. AXIOM: order[N] list contains blocks of 2^N pages. order[3] = blocks of 8 pages. order[4] = blocks of 16 pages.
+193. PROBLEM: User frees 8 pages at PFN=1000. Where to put them?
+194. NAIVE: Put in order[3] list. Done. PROBLEM: Over time, many small blocks, few large blocks. Request for 16 pages fails even if enough total free pages exist.
+195. BETTER: Check if ADJACENT 8-page block is also free. If yes, MERGE into 16-page block. Put in order[4] list.
+196. QUESTION: What is ADJACENT? Which PFN is adjacent to PFN=1000?
+197. WRONG ANSWER: PFN=1001 is adjacent. NO! PFN=1000 is START of 8-page block. Block covers PFN 1000-1007. PFN=1001 is INSIDE this block.
+198. CORRECT: For order[3] block at PFN=1000, the 8 pages are: 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007.
+199. ADJACENT BLOCK: Starts at PFN=1008 or PFN=992 (the 8 pages BEFORE).
+200. QUESTION: Which one? 1008 or 992? Answer: BUDDY formula tells us.
+201. DEFINITION: BUDDY = the OTHER half of the PARENT block. Parent = block of 16 pages (order[4]). Parent must be ALIGNED.
+202. DEFINITION: ALIGNED block = block whose starting PFN is divisible by block size. order[4] block (16 pages) must start at PFN divisible by 16.
+203. CALCULATION: Is PFN=1000 aligned for order[4]? 1000 ÷ 16 = 62.5. NOT integer. ∴ 1000 is NOT aligned for 16-page block.
+204. CALCULATION: What is nearest 16-aligned PFN ≤ 1000? 1000 ÷ 16 = 62 (floor). 62 × 16 = 992. ∴ PFN=992 is 16-aligned.
+205. CONSEQUENCE: If we want to merge block at PFN=1000 into 16-page block, parent must start at PFN=992 (since 992 is 16-aligned and 992+16=1008 covers 1000).
+206. VERIFY: Parent block at PFN=992 covers pages 992-1007. Our block at PFN=1000 covers pages 1000-1007. INSIDE parent? 1000 ≥ 992 ✓. 1007 < 1008 ✓. Yes, our block is SECOND HALF of parent.
+207. BUDDY: FIRST HALF of parent = PFN=992, pages 992-999. This is our BUDDY.
+208. FORMULA DERIVATION: How to compute buddy PFN mathematically?
+209. OBSERVATION: Order[3] blocks start at PFN divisible by 8. Order[4] blocks start at PFN divisible by 16.
+210. OBSERVATION: Two order[3] buddies share same parent. One has bit 3 (value 8) CLEAR in PFN. One has bit 3 SET.
+211. EXAMPLE: PFN=992 in binary = 1111100000. PFN=1000 in binary = 1111101000. Difference: bit 3 (counting from 0).
+212. CALCULATION: 992 = 1111100000. 1000 = 1111101000. XOR: 1111100000 XOR 1111101000 = 0000001000 = 8 = 2^3 = (1 << 3). ✓
+213. FORMULA: buddy_pfn = pfn XOR (1 << order). For order=3: buddy = pfn XOR 8.
+214. VERIFY: pfn=1000, order=3. buddy = 1000 XOR 8. Binary: 1111101000 XOR 0000001000 = 1111100000 = 992. ✓
+215. VERIFY: pfn=992, order=3. buddy = 992 XOR 8. Binary: 1111100000 XOR 0000001000 = 1111101000 = 1000. ✓ (Symmetric!)
+216. WHY XOR WORKS: XOR flips the bit at position ORDER. This toggles between first and second half of parent block.
+217. DRAW: 16-page parent at PFN=992:
+218. [PFN 992][993][994][995][996][997][998][999] | [1000][1001][1002][1003][1004][1005][1006][1007]
+219. [----------- 8 pages, bit3=0 ----------]   | [----------- 8 pages, bit3=1 ----------------]
+220. [----------- buddy of 1000 ------------]   | [----------- block at PFN=1000 --------------]
+221. MERGE ALGORITHM: free(page at PFN=1000, order=3):
+222. Step1: buddy_pfn = 1000 XOR 8 = 992.
+223. Step2: Is page at PFN=992 free? Check free_area[3] list. If 992 in list → buddy is free.
+224. Step3: If buddy free → remove buddy from order[3] list → merged_pfn = min(1000, 992) = 992 → merged_order = 3+1 = 4 → recurse: free(992, order=4).
+225. Step4: If buddy NOT free → put (1000, order=3) in free_area[3] list → done.
+226. RECURSE EXAMPLE: free(992, order=4):
+227. buddy_pfn = 992 XOR 16 = 992 XOR 10000 (binary). 992 = 1111100000. 16 = 10000. XOR = 1111110000 = 1008. buddy = 1008.
+228. Is 1008 free at order[4]? If yes → merge into order[5] block at PFN=992 (since 992 is 32-aligned: 992/32=31). If no → stop, put (992, order=4) in list.
+229. VERIFY ALIGNMENT: 992 ÷ 32 = 31. 31 is integer. ✓ 992 is 32-aligned.
+230. MAX_ORDER STOP: Recursion stops at order=10. Cannot merge order[10] blocks. Largest block = 1024 pages = 4MB.
+197. Q(line57): CHECKS FOR DOUBLE-FREE? ANSWER: YES, kernel has checks. VM_BUG_ON_PAGE(page_ref_count(page) <= 0, page) → if refcount ≤ 0 → BUG(). User-space free() calls kernel munmap() → kernel checks page_mapcount/refcount BEFORE decrementing. User-space cannot directly call put_page(). Only kernel can. Kernel assumes kernel code is correct. Kernel driver bugs CAN cause double-free → panic.
+198. Q(line58-67): WHY GFP FLAGS? FROM SCRATCH DERIVATION:
+199. AXIOM: CPU executes instructions one at a time. Current instruction address stored in register (RIP on x86_64).
+200. DEFINITION: PROCESS = running program. Process has: code, data, stack, registers. Kernel tracks each process in task_struct.
+201. DEFINITION: CONTEXT = which code is currently running. Two types: PROCESS CONTEXT = running on behalf of a process (syscall, normal code). INTERRUPT CONTEXT = running on behalf of hardware event.
+202. PROBLEM: alloc_page() sometimes fails. RAM is full. What to do?
+203. OPTION 1: Return NULL immediately. Caller handles failure. FAST but FAILS often.
+204. OPTION 2: Wait. Free some RAM. Try again. SLOWER but SUCCEEDS more.
+205. QUESTION: How to free RAM? WHERE does free RAM come from?
+206. AXIOM: Kernel uses RAM for: (A) process pages (code, heap, stack), (B) page cache (recently read files), (C) slab cache (kernel objects), (D) buffers.
+207. DEFINITION: RECLAIM = kernel takes RAM from (B), (C), (D) when needed. Pages in page cache can be DROPPED if not dirty. Dirty pages must be written to disk first.
+208. PROBLEM: Writing to disk takes TIME. Disk I/O = milliseconds. CPU cycle = nanoseconds. Ratio: 1ms / 1ns = 1,000,000×.
+209. DEFINITION: SLEEP = process stops running, waits for event (disk I/O complete). Kernel switches to another process. CANNOT sleep if no process to switch to.
+210. PROBLEM: In INTERRUPT CONTEXT, there is no process. Interrupt handler runs BETWEEN process time slices. If interrupt handler sleeps → DEADLOCK. No one to wake it up.
+211. CONSEQUENCE: Interrupt handler CANNOT sleep. Cannot wait for disk I/O. Cannot reclaim memory that requires disk write.
+212. SOLUTION: Tell allocator what is ALLOWED. Use FLAGS.
+213. DEFINITION: GFP = Get Free Pages. GFP flags = bitmask telling allocator: can you sleep? can you do I/O? can you access filesystem?
+214. AXIOM: GFP_ATOMIC = 0x0 = no bits set = cannot sleep, cannot do I/O, cannot use FS. Used in interrupt context.
+215. AXIOM: GFP_KERNEL = 0xCC0 = multiple bits set = can sleep, can do I/O, can use FS. Used in process context.
+216. DERIVATION OF 0xCC0 (repeating from lines 62-67 with more detail):
+217. AXIOM: Kernel defines bit positions as enum in include/linux/gfp_types.h line 27-38.
+218. DRAW: enum { ___GFP_DMA_BIT=0, ___GFP_HIGHMEM_BIT=1, ___GFP_DMA32_BIT=2, ___GFP_MOVABLE_BIT=3, ___GFP_RECLAIMABLE_BIT=4, ___GFP_HIGH_BIT=5, ___GFP_IO_BIT=6, ___GFP_FS_BIT=7, ... ___GFP_DIRECT_RECLAIM_BIT=10, ___GFP_KSWAPD_RECLAIM_BIT=11, ... }
+219. CALCULATION: ___GFP_IO = BIT(6) = 1 << 6 = 2^6 = 64. Binary: 0000 0100 0000. Hex: 0x40.
+220. CALCULATION: ___GFP_FS = BIT(7) = 1 << 7 = 2^7 = 128. Binary: 0000 1000 0000. Hex: 0x80.
+221. CALCULATION: ___GFP_DIRECT_RECLAIM = BIT(10) = 1 << 10 = 2^10 = 1024. Binary: 0100 0000 0000. Hex: 0x400.
+222. CALCULATION: ___GFP_KSWAPD_RECLAIM = BIT(11) = 1 << 11 = 2^11 = 2048. Binary: 1000 0000 0000. Hex: 0x800.
+223. DEFINITION: __GFP_RECLAIM = ___GFP_DIRECT_RECLAIM | ___GFP_KSWAPD_RECLAIM. Source: grep __GFP_RECLAIM gfp_types.h.
+224. CALCULATION: __GFP_RECLAIM = 0x400 | 0x800. Binary OR: 0100 0000 0000 | 1000 0000 0000 = 1100 0000 0000 = 0xC00 = 3072.
+225. DEFINITION: GFP_KERNEL = __GFP_RECLAIM | __GFP_IO | __GFP_FS. Source: grep GFP_KERNEL gfp_types.h.
+226. CALCULATION: GFP_KERNEL = 0xC00 | 0x40 | 0x80. Step: 0xC00 = 1100 0000 0000. 0x40 = 0000 0100 0000. 0x80 = 0000 1000 0000. OR all: 1100 1100 0000 = 0xCC0 = 3264.
+227. VERIFY: 3264 = 3072 + 64 + 128 = 3072 + 192 = 3264. ✓
+228. MEANING OF EACH BIT:
+229. bit 6 (__GFP_IO): Allocator CAN start disk I/O. If unset: allocator cannot touch disk.
+230. bit 7 (__GFP_FS): Allocator CAN call filesystem functions. If unset: no FS calls (avoid deadlock if already holding FS lock).
+231. bit 10 (__GFP_DIRECT_RECLAIM): Allocator CAN directly reclaim pages (caller's context). Will SLEEP waiting.
+232. bit 11 (__GFP_KSWAPD_RECLAIM): Allocator CAN wake kswapd.
+233. DEFINITION: kswapd = kernel thread. Runs in background. Reclaims memory when free pages low. One kswapd per NUMA node.
+234. DRAW: alloc_page(GFP_KERNEL=0xCC0) → check free list → if empty → bit 10 set → try direct reclaim → sleep while pages freed → retry → success.
+235. DRAW: alloc_page(GFP_ATOMIC=0x0) → check free list → if empty → no bits set → cannot reclaim → return NULL immediately.
+236. EXAMPLE SCENARIO: Driver in interrupt handler needs 1 page. Uses GFP_ATOMIC. Free list empty. alloc_page returns NULL. Driver must handle failure. Cannot wait.
+237. EXAMPLE SCENARIO: Process calls mmap(). Kernel needs page. Uses GFP_KERNEL. Free list empty. Kernel reclaims page cache. Process sleeps 1ms. Page freed. alloc_page succeeds.
+238. WHY FLAGS AT BOOT? At boot: all RAM free. Buddy allocator full. alloc_page succeeds immediately. GFP flags ignored. At runtime: RAM used. alloc_page may fail. GFP flags control fallback behavior.
+199. Q(line68): ALLOCATES FROM WHERE? ANSWER: Buddy allocator maintains FREE LISTS. Boot: memblock gives all RAM to buddy → buddy builds free lists. alloc_page() → removes page from free list → gives to caller. NOT "already allocated at boot". Boot ORGANIZES, runtime DISTRIBUTES. DRAW: boot→[RAM=all_pages]→memblock→[buddy_free_lists]→runtime→alloc_page()→[page removed from list]→put_page()→[page returned to list].
+200. Q(line70): WHAT IF TWO CALL PAGE_REF_COUNT TOGETHER? ANSWER: page_ref_count() uses atomic_read(). atomic_read() is LOCK-FREE read on x86. Multiple CPUs can read simultaneously. No race condition for READ. For WRITE (get_page/put_page): uses atomic_inc/atomic_dec → CPU instruction LOCK prefix → hardware ensures atomicity.
+201. Q(line71): BUT ALLOC_PAGE ALREADY SET REFCOUNT=1? ANSWER: get_page() is for SECOND user. SCENARIO: Process_A calls alloc_page() → refcount=1. Process_A shares page with Process_B → get_page() → refcount=2. Both A and B now have reference. When A done → put_page() → refcount=1. When B done → put_page() → refcount=0 → freed. WITHOUT get_page(): A shares with B, A calls put_page() → refcount=0 → FREED while B still using → CRASH.
+202. Q(line72): WHAT IF PUT_PAGE ON ILLEGAL PAGE? ANSWER: put_page(NULL) → NULL pointer dereference → kernel OOPS. put_page(invalid_address) → page_ref_dec_and_test reads garbage → undefined behavior. put_page(freed_page) → refcount goes negative OR corrupts re-allocated page → BUG_ON or silent corruption. Kernel does NOT validate page pointer. Assume caller is correct. Driver bug = kernel bug = panic.
+203. Q(line77): TYPECAST AND CR3 RELATION? DRAW: pfn=123→phys=123×4096=503808=0x7B000→this_is_RAM_bus_address. (phys_addr_t) = cast to unsigned long long = 64-bit integer. phys is JUST A NUMBER, not a pointer. CANNOT dereference phys directly. To access RAM at phys: virt=__va(phys)=phys+PAGE_OFFSET=0x7B000+0xFFFF888000000000=0xFFFF88800007B000 → NOW can dereference. CR3 relation: CR3 register holds ROOT of page tables (PML4). Page table entries contain PFN. PFN×4096=physical_address_of_next_table_or_page. MMU uses PFN, kernel uses PFN, allocator tracks PFN.
+204. Q(line78): TYPE OF REF? ANSWER: ref type = int = 4 bytes = signed 32-bit. page_ptr type = struct page * = 8 bytes = pointer. WHY care? You are learning what kernel tracks. ref=1 means 1 user. ref=0 means free. Type tells you range: int can be -2B to +2B. refcount > 2B users = impossible = overflow check.
+205. Q(line79): PFN RANGE VS PML4 INDEXING? THESE ARE DIFFERENT THINGS. PML4 indexing: virtual_address[47:39]=PML4_index, [38:30]=PDPT_index, [29:21]=PD_index, [20:12]=PT_index, [11:0]=offset. This gives VIRTUAL address translation. PFN and zones: physical_address/4096=PFN. Zone tells allocator WHERE in RAM. RELATION: PT_entry contains PFN. DRAW: user_virtual_0x7FFFFFFF000→PML4[255]→PDPT[511]→PD[511]→PT[4095]→PTE_contains_PFN=123→physical=0x7B000. Zone of PFN 123: 123<4096→ZONE_DMA. PML4 indexing finds physical page. Zone tells allocator which freelist to use.
+206. ---
+207. PROGRESS STATUS
+208. ---
+209. DONE: worksheet 237 lines. DONE: bootmem_trace.c compiled. DONE: questions answered with from-scratch derivations.
+210. PENDING: insmod bootmem_trace.ko → dmesg → verify refcount transitions.
+211. PENDING: uncomment bug line → trigger refcount=-1 → observe kernel warning.
+212. PENDING: git push.
+213. ---
