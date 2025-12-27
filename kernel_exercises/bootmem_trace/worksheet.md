@@ -272,9 +272,16 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 216. ---
 217. DEFINITION: WHAT IS A BUDDY? (FROM SCRATCH)
 218. ---
-219. PROBLEM: Block at PFN=1000, order=3 (8 pages) is freed. Where to put it?
-220. NAIVE: Put in free_area[3] list. Done. PROBLEM: Fragmentation over time.
-221. BETTER: If ANOTHER 8-page block is ADJACENT and FREE, MERGE into 16-page block.
+219. NEW SCENARIO (unrelated to lines 207-215): We now explore FREEING, not allocating.
+220. AXIOM: System has been running. Many allocations and frees happened. Current state varies.
+221. SCENARIO A (buddy NOT free): Before free, order[3].nr_free=0. All 8-page blocks are in use.
+222. DRAW STATE A BEFORE: free_area[3] = { head→NULL, nr_free=0 }. Block PFN=1000 is IN USE. Block PFN=992 is IN USE.
+223. SCENARIO B (buddy IS free): Before free, order[3].nr_free=1. One 8-page block (PFN=992) is free.
+224. DRAW STATE B BEFORE: free_area[3] = { head→[PFN=992]→NULL, nr_free=1 }. Block PFN=1000 is IN USE. Block PFN=992 is FREE.
+225. NOW: User frees block at PFN=1000 (8 pages). What happens? Depends on scenario.
+226. PROBLEM: Block at PFN=1000, order=3 (8 pages) is freed. Where to put it?
+227. NAIVE: Put in free_area[3] list. Done. PROBLEM: Fragmentation over time.
+228. BETTER: FIRST check if buddy is free. If yes, merge. If no, just add to list.
 222. QUESTION: What does ADJACENT mean for blocks?
 223. ANSWER: Two blocks are adjacent if one ends where the other starts. No gap. No overlap.
 224. EXAMPLE: Block A = PFN 1000-1007 (8 pages). Block B = PFN 1008-1015 (8 pages). Adjacent? 1007+1=1008. ✓ Adjacent.
@@ -319,6 +326,22 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 224. CONVERT: 1111100000 = 512+256+128+64+32+0+0+0+0+0 = 992. Buddy PFN=992. ✓
 225. REVERSE: buddy=992, order=3. 992 XOR 8 = ?. 992=1111100000. 8=0000001000. XOR=1111101000=1000. ✓
 226. ---
+227. SCENARIO A TRACE (buddy NOT free): Buddy PFN=992. Is 992 in free_area[3] list?
+228. STATE A BEFORE: free_area[3] = { head→NULL, nr_free=0 }. List is EMPTY.
+229. CHECK: Is 992 in empty list? NO. Buddy is NOT free.
+230. ACTION: Cannot merge. Just add PFN=1000 to list.
+231. STATE A AFTER: free_area[3] = { head→[PFN=1000]→NULL, nr_free=1 }.
+232. RESULT A: No merge. 1 block of 8 pages in order[3].
+233. ---
+234. SCENARIO B TRACE (buddy IS free): Buddy PFN=992. Is 992 in free_area[3] list?
+235. STATE B BEFORE: free_area[3] = { head→[PFN=992]→NULL, nr_free=1 }. Block 992 IS in list.
+236. CHECK: Is 992 in list? YES. Buddy is FREE.
+237. ACTION: Remove 992 from list. Merge 992+1000 into 16-page block at PFN=992.
+238. STATE B AFTER order[3]: free_area[3] = { head→NULL, nr_free=0 }. Both blocks removed, merged.
+239. NEXT: Merged block (PFN=992, order=4) must be added to order[4]. But first, check order[4] buddy.
+240. RECURSE: buddy of (992,order=4) = 992 XOR 16 = 1008. Is 1008 in free_area[4]? If yes→merge again. If no→add to order[4].
+241. RESULT B: Merge happened. order[3] emptied. 1 block of 16 pages moved to order[4] (or higher if more merges).
+242. ---
 227. FRACTIONAL EDGE: NON-POWER-OF-2 REQUEST
 228. ---
 229. PROBLEM: User needs 5 pages. 5 is NOT power of 2. What order?
