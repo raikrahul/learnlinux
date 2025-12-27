@@ -473,3 +473,149 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 211. PENDING: uncomment bug line → trigger refcount=-1 → observe kernel warning.
 212. PENDING: git push.
 213. ---
+214. ===
+215. BUDDY ALLOCATOR COMPLETE ALGORITHM (DERIVED FROM FREE PROBLEM)
+216. ===
+217. FACT: User finished using 8 pages at PFN 1572864, 1572865, 1572866, 1572867, 1572868, 1572869, 1572870, 1572871.
+218. FACT: User calls __free_pages(page_ptr, 3). Kernel must return these 8 pages.
+219. QUESTION: Where does kernel put these 8 pages?
+220. ---
+221. OPTION 1: JUST ADD TO LIST
+222. ACTION: Add block (PFN=1572864, 8 pages) to free_area[3] list.
+223. RESULT: free_area[3].nr_free increases by 1.
+224. PROBLEM: Missed opportunity to create larger block.
+225. ---
+226. THE PROBLEM WITH OPTION 1
+227. SCENARIO: Before free, state was:
+228. free_area[3] contains: [PFN=1572872] (1 block, 8 pages).
+229. free_area[4] contains: [] (0 blocks).
+230. OBSERVATION: PFN 1572872-1572879 is FREE. PFN 1572864-1572871 is being freed.
+231. DRAW:
+232. PFN: 1572864 1572865 1572866 1572867 1572868 1572869 1572870 1572871 | 1572872 1572873 1572874 1572875 1572876 1572877 1572878 1572879
+233.      [------- 8 pages being freed (user returning) ---------------] | [------- 8 pages already free (in list) ---------------------]
+234.      [------- BLOCK A -----------------------------------------] | [------- BLOCK B -----------------------------------------]
+235. OBSERVATION: Block A and Block B are ADJACENT. Combined = 16 contiguous pages.
+236. ---
+237. WHY COMBINING IS GOOD
+238. FUTURE REQUEST: Someone asks for 16 pages (order=4).
+239. IF NOT COMBINED: free_area[4] = 0 blocks. FAIL.
+240. IF COMBINED: free_area[4] = 1 block. SUCCESS.
+241. CONCLUSION: Combining adjacent blocks allows larger future allocations.
+242. ---
+243. QUESTION: WHICH ADJACENT BLOCK TO COMBINE WITH?
+244. Block at PFN=1572864 has TWO adjacent 8-page blocks:
+245. BEFORE: PFN 1572856-1572863.
+246. AFTER: PFN 1572872-1572879.
+247. WHICH ONE?
+248. ---
+249. CHECKING BEFORE BLOCK (PFN 1572856-1572863)
+250. IF COMBINED: 1572856-1572863 + 1572864-1572871 = 16 pages at PFN 1572856.
+251. RULE: 16-page block must start at PFN divisible by 16.
+252. CHECK: 1572856 ÷ 16 = 98303.5. NOT integer.
+253. CONCLUSION: CANNOT combine with 1572856. Wrong alignment.
+254. ---
+255. CHECKING AFTER BLOCK (PFN 1572872-1572879)
+256. IF COMBINED: 1572864-1572871 + 1572872-1572879 = 16 pages at PFN 1572864.
+257. CHECK: 1572864 ÷ 16 = 98304. INTEGER.
+258. CONCLUSION: CAN combine with 1572872. Correct alignment.
+259. ---
+260. WHY ONE WORKS AND OTHER DOESN'T
+261. DRAW 16-PAGE BOUNDARIES:
+262. PFN:       1572848 -------- 1572863 | 1572864 -------- 1572879 | 1572880 -------- 1572895
+263.            [---- 16 pages --------] | [---- 16 pages --------] | [---- 16 pages --------]
+264. 1572864 is ON a 16-page boundary. 1572856 is NOT.
+265. RULE: Can only combine into blocks that start ON boundaries.
+266. ---
+267. DEFINITION: PARENT
+268. PARENT = the 16-page block that contains our 8-page block.
+269. Our block: 1572864-1572871.
+270. Parent: 1572864-1572879 (16 pages, starts at 1572864 which is 16-aligned).
+271. ---
+272. DEFINITION: BUDDY
+273. BUDDY = the OTHER half of the same parent.
+274. Parent: 1572864-1572879.
+275. First half: 1572864-1572871 (our block).
+276. Second half: 1572872-1572879 (the buddy).
+277. NAME REASON: They can combine. They are partners.
+278. ---
+279. FINDING BUDDY MATHEMATICALLY
+280. Our PFN: 1572864.
+281. Parent must be 16-aligned. 1572864 ÷ 16 = 98304. Integer. Parent starts at 1572864.
+282. Parent covers: 1572864 to 1572864+16-1 = 1572879.
+283. We are: first 8 pages.
+284. Buddy is: last 8 pages. Buddy PFN = 1572864 + 8 = 1572872.
+285. ---
+286. ALTERNATE CASE: WHAT IF WE HAD PFN 1572872?
+287. Our PFN: 1572872.
+288. Parent must be 16-aligned. 1572872 ÷ 16 = 98304.5. NOT integer.
+289. Round down: 1572872 - (1572872 mod 16). 1572872 mod 16 = 8. Parent = 1572872 - 8 = 1572864.
+290. Buddy PFN = 1572864.
+291. ---
+292. PATTERN:
+293. Case 1: PFN=1572864. Buddy=1572872. Difference=+8.
+294. Case 2: PFN=1572872. Buddy=1572864. Difference=-8.
+295. Pattern: Buddy differs by 8 = 2^3 = 2^order.
+296. ---
+297. WHICH HALF ARE WE?
+298. 1572864 mod 16 = 0 → first half → add 8 to get buddy.
+299. 1572872 mod 16 = 8 → second half → subtract 8 to get buddy.
+300. ---
+301. XOR TRICK
+302. PROBLEM: Need one formula for both cases (add or subtract).
+303. OBSERVATION: 1572864 has bit 3 = 0 (divisible by 16 means bits 0-3 are 0, but 1572864 is divisible by 16 so bit 3 is 0).
+304. OBSERVATION: 1572872 has bit 3 = 1 (1572872 = 1572864 + 8, adding 8 sets bit 3).
+305. XOR WITH 8:
+306. 1572864 XOR 8: bit 3 is 0, XOR flips to 1, result = 1572864 + 8 = 1572872.
+307. 1572872 XOR 8: bit 3 is 1, XOR flips to 0, result = 1572872 - 8 = 1572864.
+308. FORMULA: buddy_pfn = pfn XOR (1 << order). For order=3: buddy = pfn XOR 8.
+309. ---
+310. COMPLETE FREE ALGORITHM
+311. ---
+312. STEP 1: User calls __free_pages(page_ptr, 3). Kernel receives PFN=1572864, order=3.
+313. STEP 2: Calculate buddy. buddy_pfn = 1572864 XOR 8 = 1572872.
+314. STEP 3: Check free_area[3] list. Is block at PFN=1572872 in the list?
+315. CASE A (buddy NOT free):
+316.   1572872 not in list.
+317.   ACTION: Add PFN=1572864 to free_area[3].
+318.   free_area[3].nr_free: N → N+1.
+319.   DONE.
+320. CASE B (buddy IS free):
+321.   1572872 IS in list.
+322.   ACTION: Remove 1572872 from free_area[3].
+323.   free_area[3].nr_free: N → N-1.
+324.   MERGE: Combined block at PFN=1572864, order=4 (16 pages).
+325.   RECURSE: Call free algorithm with PFN=1572864, order=4.
+326. ---
+327. RECURSE AT ORDER=4
+328. ---
+329. STEP 1: PFN=1572864, order=4.
+330. STEP 2: buddy_pfn = 1572864 XOR (1 << 4) = 1572864 XOR 16.
+331. CHECK: 1572864 mod 32 = ?. 1572864 ÷ 32 = 49152. Integer. mod = 0. Bit 4 = 0.
+332. CALCULATION: 1572864 XOR 16 = 1572864 + 16 = 1572880.
+333. STEP 3: Is 1572880 in free_area[4]?
+334. CASE A: NO. Add (1572864, order=4) to free_area[4]. DONE.
+335. CASE B: YES. Remove 1572880. Merge into (1572864, order=5). Recurse.
+336. ---
+337. RECURSION STOPS WHEN
+338. CONDITION 1: Buddy not free. Add to current order list.
+339. CONDITION 2: Reached order=10. MAX_ORDER=11, so order 0-10. Cannot merge order=10 blocks.
+340. ---
+341. VERIFY XOR WORKS
+342. 1572864 XOR 8:
+343. 1572864 = 98304 × 16 = divisible by 16 → bits 0,1,2,3 = 0.
+344. XOR with 8 (bit 3 = 1) → flips bit 3 → adds 8.
+345. 1572864 + 8 = 1572872. ✓
+346. 1572872 XOR 8:
+347. 1572872 = 1572864 + 8 → bit 3 = 1.
+348. XOR with 8 → flips bit 3 → subtracts 8.
+349. 1572872 - 8 = 1572864. ✓
+350. ---
+351. SOURCE CODE REFERENCE
+352. File: /usr/src/linux-source-6.8.0/mm/page_alloc.c
+353. Line 767: static inline void __free_one_page(struct page *page, unsigned long pfn, struct zone *zone, unsigned int order, ...)
+354. Line 795: buddy = find_buddy_page_pfn(page, pfn, order, &buddy_pfn);
+355. Line 821: del_page_from_free_list(buddy, zone, order);
+356. Line 825: order++;
+357. ---
+358. END OF BUDDY ALGORITHM
+359. ---
