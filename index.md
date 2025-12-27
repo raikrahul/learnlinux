@@ -49,6 +49,12 @@ Deep dive into Linux kernel memory management, page tables, and system internals
 | [demo_19](/demos/demo_19/) | Copy-on-Write Demo |
 | [demo_20](/demos/demo_20/) | Swap Subsystem Info |
 
+## Kernel Exercises
+
+| Exercise | Description |
+|----------|-------------|
+| [bootmem_trace](/kernel_exercises/bootmem_trace/) | Page Allocation and Refcount Bug |
+
 ## Machine Specifications
 
 ```
