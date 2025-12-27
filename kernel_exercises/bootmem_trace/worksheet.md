@@ -1,3 +1,60 @@
+# KERNEL MEMORY MANAGEMENT: AXIOMATIC DERIVATION WORKSHEET
+## Bootmem Trace Exercise | Linux Kernel 6.8.0 | x86_64
+
+---
+
+### MACHINE SPECIFICATIONS
+| Property | Value | Source Command |
+|----------|-------|----------------|
+| RAM | 15776276 kB = 15.04 GB | `cat /proc/meminfo \| grep MemTotal` |
+| PAGE_SIZE | 4096 bytes | `getconf PAGE_SIZE` |
+| Total Pages | 3944069 | 15776276×1024÷4096 |
+| Kernel | 6.14.0-37-generic | `uname -r` |
+| vmemmap | 0xffffea0000000000 | Kernel headers |
+
+---
+
+### TABLE OF CONTENTS
+1. [Lines 01-20] **RAM → Pages → PFN**: Fundamental memory division
+2. [Lines 21-36] **struct page → vmemmap**: Metadata tracking for each PFN
+3. [Lines 37-50] **Zones**: DMA, DMA32, Normal memory regions
+4. [Lines 51-70] **_refcount**: Reference counting mechanism
+5. [Lines 71-100] **GFP Flags**: Allocation permission bitmask
+6. [Lines 100-200] **Buddy Allocator**: Free list organization by order
+7. [Lines 200-360] **Buddy Algorithm**: Split on alloc, merge on free, XOR trick
+8. [Lines 360-521] **Source Code Proofs**: Kernel source verification
+
+---
+
+### LESSON OBJECTIVES
+After completing this worksheet, you will be able to:
+- [ ] Calculate PFN from physical address and vice versa
+- [ ] Trace struct page location using vmemmap arithmetic
+- [ ] Determine zone membership from PFN
+- [ ] Explain refcount lifecycle: alloc→get→put→free
+- [ ] Derive buddy PFN using XOR formula
+- [ ] Verify all formulas against kernel source code
+
+---
+
+### NOTATION GUIDE
+| Symbol | Meaning |
+|--------|---------|
+| ✓ | Verified/Correct |
+| ✗ | Failed/Incorrect |
+| → | Leads to / Implies |
+| ∴ | Therefore |
+| AXIOM | Accepted truth from source |
+| DEFINITION | New term being defined |
+| CALCULATION | Step-by-step arithmetic |
+| DRAW | Visual diagram |
+| PROOF | Source code reference |
+
+---
+
+## PART 1: RAM TO PAGES
+---
+
 01. AXIOM: Computer has RAM (Random Access Memory). RAM = hardware chip storing data.
 02. AXIOM: RAM contains BYTES. 1 byte = 8 bits. 1 bit = 0 or 1.
 03. AXIOM: Each byte has ADDRESS. Address = number identifying byte location. First byte = address 0. Second byte = address 1. N-th byte = address N-1.
@@ -18,6 +75,12 @@
 18. EXAMPLE: PFN 5. Physical address = 5 × 4096 = 20480. Verify: Page 5 = bytes 20480-24575. First byte = 20480. ✓
 19. CALCULATION: Total pages = 16154906624 bytes ÷ 4096 bytes/page. Calculate by hand: 16154906624 ÷ 4096.
 20. CALCULATION: 16154906624 ÷ 4096 = 16154906624 ÷ 4 ÷ 1024 = 4038726656 ÷ 1024 = 3944069 pages. This machine has 3944069 pages.
+
+---
+
+## PART 2: STRUCT PAGE AND VMEMMAP
+---
+
 21. PROBLEM: Kernel needs metadata for each page. Metadata = information about page (is it free? who is using it? how many users?).
 22. SOLUTION: Create data structure for each PFN -- NOT PAGE -- THIS WAS WRONG TO BE INTRODUCED -- BECAUSE YOU ARE TALKING ABOUT PFN AND ALL OF A SUDDEN YOU JUMP TO PAGE WHICH IS BAD FOR WORKING MEMORY OF BRAIN . Data structure = collection of related variables.
 23. DEFINITION: struct page = kernel data structure. One struct page exists for each physical page. struct page contains: flags, _refcount, _mapcount, other fields. WHAT IS COLLECTION TO PFN DOES IT CONTAIN ?
@@ -40,6 +103,12 @@
 1000 IS THE ID OF THE INNMATE IN MY CELL -- THE BASE ADDRESS OF THE FIRST CELL IN THE JAIL BUILDING IS THAT FFFFFF THINGS -- ESCLATE THIS UP -- TO GET THE JAIL ADDRESS I MEAN CELL ADDRESS 
 
 36. VERIFY: 64000 in hex. 64000 ÷ 16 = 4000 r0 → 4000 ÷ 16 = 250 r0 → 250 ÷ 16 = 15 r10=A → 15 ÷ 16 = 0 r15=F → read bottom-up: FA00. 64000 = 0xFA00. ✓
+
+---
+
+## PART 3: MEMORY ZONES
+---
+
 37. PROBLEM: Old hardware cannot access all RAM addresses. 24-bit address bus = can only address 2^24 = 16777216 bytes = 16 MB.
 38. PROBLEM: 32-bit hardware cannot access addresses above 2^32 = 4294967296 bytes = 4 GB.
 39. SOLUTION: Divide RAM into ZONES. Zone = region of RAM with specific address range.
@@ -75,6 +144,12 @@
 49. CALCULATION: 4294967296 ÷ 4096 = 1048576. DMA32 zone ends at PFN 1048576.
 50. RULE: 4096 ≤ PFN < 1048576 → zone = DMA32.
 51. RULE: PFN ≥ 1048576 → zone = Normal.
+
+---
+
+## PART 4: REFERENCE COUNTING (_refcount)
+---
+
 52. DEFINITION: _refcount = reference count. Integer tracking how many users are using a page. WHY? Prevent freeing page while someone still using it.
 who are these users and why do i care/ i thought at time of boot there is 1:1 mapping and no user space process can ever watch any other process virtual memory 
 53. BEHAVIOR: alloc_page() sets _refcount = 1. Page has 1 user (the allocator).
@@ -88,6 +163,12 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 -- what does it mean retutned -- we just said count is zero hence it should beinvalud
 57. BUG: If put_page called when _refcount already 0 → _refcount = 0 - 1 = -1 → INVALID → kernel panics or warns.
 -- really? are there no checks or wrappers to prevent this -what if user space code keeps calling free all the time 
+
+---
+
+## PART 5: GFP FLAGS (Get Free Page)
+---
+
 58. DEFINITION: GFP = Get Free Page. GFP flags tell kernel how to allocate memory.
 -- what do you mean how -- we are talking about page frame numbers being placeholders for ram -- what is need of all this -- get from where -- from ram but i already purchased ram 
 59. DEFINITION: GFP_KERNEL = flags for normal kernel allocation. Process can sleep. Can do disk I/O. Can use filesystem. -- no whatt is normal-- who can sleep because at boot t ime all entries are there in the pml4 page so whatt is need of this flag at all
@@ -195,6 +276,12 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 155. Q(line52): WHO ARE USERS OF _REFCOUNT? ANSWER: USER_1: kernel allocates page for process heap → refcount=1. USER_2: kernel maps SAME page to another process (shared memory) → get_page() → refcount=2. USER_3: kernel uses page for page cache (file backed) → refcount=3. DRAW: [struct page]→_refcount=3→[process_A:mmap][process_B:mmap][page_cache]. When each user finishes → put_page() → refcount:3→2→1→0→freed.
 156. Q(line53): TRACE MALLOC TO ALLOC_PAGE. DRAW: user_calls_malloc(4096)→libc_malloc→brk()/mmap()syscall→kernel:do_brk_flags()/do_mmap()→vm_area_alloc()→page_fault_later→handle_mm_fault()→do_anonymous_page()→alloc_page(GFP_HIGHUSER_MOVABLE)→__alloc_pages()→get_page_from_freelist()→rmqueue()→page_returned→set_pte_at()→update_PML4/PDPT/PD/PT→user_gets_virtual_address. 100 processes = 100 independent paths, same function chain.
 157. Q(line54-55): WHY GET INCREMENTS AND PUT DECREMENTS? NAMING CONFUSION. get_page = "I am getting/acquiring this page" → refcount++ (I am now a user). put_page = "I am putting back/releasing this page" → refcount-- (I am no longer a user). NOT get=read, put=write. Think: get=take, put=give_back.
+
+---
+
+## PART 6: BUDDY ALLOCATOR (FROM SCRATCH)
+---
+
 158. Q(line56): WHAT IS BUDDY ALLOCATOR? FROM SCRATCH DERIVATION:
 159. AXIOM: RAM on this machine = 16154906624 bytes (line 08). Pages = 3944069 (line 20). Each page = 4096 bytes (line 12).
 160. PROBLEM: Kernel needs 8 contiguous pages. How to find them fast?
@@ -473,6 +560,12 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 211. PENDING: uncomment bug line → trigger refcount=-1 → observe kernel warning.
 212. PENDING: git push.
 213. ---
+
+---
+
+## PART 7: BUDDY ALGORITHM (FREE OPERATION & XOR TRICK)
+---
+
 214. ===
 215. BUDDY ALLOCATOR COMPLETE ALGORITHM (DERIVED FROM FREE PROBLEM)
 216. ===
@@ -619,6 +712,12 @@ who are these users and why do i care/ i thought at time of boot there is 1:1 ma
 357. ---
 358. END OF BUDDY ALGORITHM
 359. ---
+
+---
+
+## PART 8: SOURCE CODE PROOFS
+---
+
 360. ===
 361. SOURCE CODE PROOFS FOR EACH ASSERTION
 362. ===
