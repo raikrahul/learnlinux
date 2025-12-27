@@ -1044,13 +1044,7 @@ TOTAL BLOCKS: Still finite. Still bounded.
 
 **YOUR KEYSTROKES:** 
 ```
-"howw is this possible" → typo
-"adcanebt" → typo for "adjacent"
-"gatekweepers" → typo
-"ocnfigutation" → typo
-"differetn" → typo
-"scrartch" → typo
-"flkow" → typo
+What a waste 
 ```
 
 **TIME WASTED:** ~20 seconds correcting typos I had to parse.
@@ -1102,5 +1096,125 @@ TOTAL BLOCKS: Still finite. Still bounded.
 **ROOT CAUSE:** You want to understand buddy allocator. You don't want to read buddy allocator derivation. These are incompatible goals.
 
 **SOLUTION:** Read slower. Type less. Ask specific line questions. Stop demanding "from scratch" while skipping "from scratch" explanations.
+
+---
+
+---
+
+## PART 10: RUNTIME DATA (ACTUAL MODULE EXECUTION)
+---
+
+### EXECUTION: 2025-12-27 23:51 IST
+```
+sudo insmod bootmem_trace.ko
+sudo dmesg | grep BOOTMEM
+```
+
+### RAW OUTPUT:
+```
+[209191.677978] BOOTMEM_TRACE:__init
+[209191.677989] BOOTMEM_TRACE:page=fffff895054a1480,pfn=0x152852(1386578),phys=0x152852000,ref=1,zone=Normal
+[209191.678000] BOOTMEM_TRACE:before_get:ref=1
+[209191.678005] BOOTMEM_TRACE:after_get:ref=2(expect2)
+[209191.678010] BOOTMEM_TRACE:before_put1:ref=2
+[209191.678015] BOOTMEM_TRACE:after_put1:ref=1(expect1)
+[209191.678020] BOOTMEM_TRACE:before_put2:ref=1
+[209191.678025] BOOTMEM_TRACE:after_put2:page_freed(ref_read_is_UB)
+[209191.678030] BOOTMEM_TRACE:BUG_LINE_COMMENTED→uncomment_line_above_to_trigger_refcount_underflow
+[209191.678034] BOOTMEM_TRACE:init_complete
+```
+
+### EXTRACTED VALUES:
+```
+page_ptr       = 0xfffff895054a1480
+pfn            = 0x152852 = 1386578
+phys           = 0x152852000 = 5679931392
+ref_after_alloc = 1
+zone           = Normal
+```
+
+### VERIFICATION CALCULATIONS:
+```
+PFN → PHYSICAL ADDRESS:
+pfn × PAGE_SIZE = phys
+1386578 × 4096 = ?
+  1386578 × 4000 = 5546312000
+  1386578 × 96   = 133111488
+  5546312000 + 133111488 = 5679423488 ← WRONG
+  
+REDO: 1386578 × 4096:
+  1386578 × 4096 = 1386578 × (4000 + 96)
+  1386578 × 4000 = 5546312000
+  1386578 × 96 = 133111488
+  SUM = 5679423488
+  
+HEX CHECK: 0x152852000 = 1×16^8 + 5×16^7 + 2×16^6 + 8×16^5 + 5×16^4 + 2×16^3
+  = 4294967296 + 1342177280 + 33554432 + 8388608 + 327680 + 8192
+  = 5679423488 ✓
+
+ZONE CHECK:
+pfn = 1386578
+DMA_boundary = 4096
+DMA32_boundary = 1048576
+1386578 < 4096? NO
+1386578 < 1048576? NO
+1386578 ≥ 1048576? YES → zone = Normal ✓
+```
+
+### REFCOUNT TRACE:
+```
+TIME          FUNCTION           BEFORE    OPERATION           AFTER
+209191.677989 alloc_page         0         set_page_refcounted 1
+209191.678000 (read)             1         -                   1
+209191.678005 get_page           1         atomic_inc          2
+209191.678015 put_page           2         atomic_dec          1
+209191.678025 put_page           1         atomic_dec          0 → FREE
+```
+
+### MEMORY LAYOUT:
+```
+page_ptr = 0xfffff895054a1480
+
+OFFSET   FIELD         SIZE   VALUE
++0       flags         8      0x0000000000010000 (assumed)
++8       _refcount     4      1→2→1→0
++12      _mapcount     4      -1
++16      mapping       8      NULL
++24      index         8      0
++32      private       8      0
++40      lru           16     linked_list_node
++56      padding       8      -
+TOTAL                  64     bytes
+```
+
+### VMEMMAP CALCULATION:
+```
+vmemmap_base = 0xffffea0000000000
+page_ptr     = 0xfffff895054a1480
+
+diff = 0xfffff895054a1480 - 0xffffea0000000000
+     = 0xf95054a1480
+     = 17146571350144 (decimal)
+
+pfn = diff / 64 = 17146571350144 / 64 = 267915177346 ← TOO LARGE
+
+OBSERVATION: vmemmap on this kernel differs from expected.
+ACTUAL vmemmap_base = page_ptr - (pfn × 64)
+                    = 0xfffff895054a1480 - (1386578 × 64)
+                    = 0xfffff895054a1480 - 88740992
+                    = 0xfffff895054a1480 - 0x54A1480
+                    = 0xfffff89500000000
+
+DERIVED: vmemmap_base = 0xfffff89500000000 (this kernel)
+```
+
+### PENDING:
+```
+[ ] Uncomment line 45 in bootmem_trace.c
+[ ] Recompile: make clean && make
+[ ] Reload: sudo rmmod bootmem_trace && sudo insmod bootmem_trace.ko
+[ ] Observe: sudo dmesg | tail -30
+[ ] Expected: VM_BUG_ON or WARNING for refcount=-1
+```
 
 ---
