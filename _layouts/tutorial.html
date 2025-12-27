@@ -1,0 +1,27 @@
+---
+layout: default
+---
+
+<article class="tutorial">
+    <header class="tutorial-header">
+        <h1>{{ page.title }}</h1>
+        {% if page.difficulty %}
+        <span class="difficulty">Difficulty: {{ page.difficulty }}</span>
+        {% endif %}
+    </header>
+
+    <div class="tutorial-content">
+        {{ content }}
+    </div>
+
+    {% if page.exercises %}
+    <section class="exercises">
+        <h2>Exercises</h2>
+        <ul>
+            {% for exercise in page.exercises %}
+            <li>{{ exercise }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+</article>

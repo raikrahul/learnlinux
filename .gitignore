@@ -1,0 +1,30 @@
+# Jekyll build output
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+
+# Ruby/Bundler
+Gemfile.lock
+.bundle/
+vendor/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Draft posts (optional - remove if you want to track drafts)
+# _drafts/
+
+# Node (if using any JS tools)
+node_modules/
+
+# Logs
+*.log

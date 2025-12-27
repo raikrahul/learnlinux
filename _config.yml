@@ -1,0 +1,69 @@
+# Site settings
+title: Learn Linux Internals
+description: Deep dive into Linux kernel memory management, page tables, and system internals
+author: raikrahul
+email: your-email@example.com
+url: "https://raikrahul.github.io"
+baseurl: "/learnlinux"
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+theme: minima
+
+# Permalink structure
+permalink: /:categories/:year/:month/:day/:title/
+
+# Collections for organizing content
+collections:
+  tutorials:
+    output: true
+    permalink: /tutorials/:path/
+  demos:
+    output: true
+    permalink: /demos/:path/
+
+# Default front matter
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+      author: "raikrahul"
+  - scope:
+      path: ""
+      type: "tutorials"
+    values:
+      layout: "tutorial"
+  - scope:
+      path: ""
+      type: "demos"
+    values:
+      layout: "demo"
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - README.md
+  - LICENSE
+
+# Pagination (if using jekyll-paginate)
+paginate: 10
+paginate_path: "/page/:num/"
+
+# Analytics (optional - add your tracking ID)
+# google_analytics: UA-XXXXXXXX-X
+
+# Social links
+social:
+  github: raikrahul
