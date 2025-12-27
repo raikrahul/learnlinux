@@ -1,90 +1,129 @@
-/*numa_zone_trace.c:LINE01:AXIOM:RAM=16154906624bytes(from_worksheet_line05)→LINE02:PAGE_SIZE=4096bytes(worksheet_line06)→LINE03:Total_pages=16154906624÷4096=3944069(worksheet_line09)→LINE04:NUMA_nodes=1(worksheet_line10)→LINE05:This_file_traces_node_and_zone_data_structures_using_real_values_from_this_machine*/
-#include <linux/module.h>  /*LINE06:module.h:provides_MODULE_LICENSE,MODULE_AUTHOR,module_init,module_exit→included_first_because_all_kernel_modules_need_it*/
-#include <linux/kernel.h>  /*LINE07:kernel.h:provides_printk→printk(KERN_INFO"msg")→writes_to_kernel_ring_buffer→visible_via_dmesg*/
-#include <linux/init.h>    /*LINE08:init.h:provides___init,__exit→__init=code_discarded_after_boot→saves_memory*/
-#include <linux/mm.h>      /*LINE09:mm.h:provides_page_to_pfn,page_zone,page_to_nid→memory_management_functions*/
-#include <linux/gfp.h>     /*LINE10:gfp.h:provides_alloc_page,GFP_KERNEL→page_allocation_API*/
-#include <linux/mmzone.h>  /*LINE11:mmzone.h:provides_pg_data_t,struct_zone,for_each_online_node,NODE_DATA→zone_and_node_data_structures*/
-#include <linux/nodemask.h>/*LINE12:nodemask.h:provides_for_each_online_node→macro_iterating_NUMA_nodes→expands_to_for_each_node_state(node,N_ONLINE)*/
-MODULE_LICENSE("GPL");     /*LINE13:GPL_required_for_kernel_symbol_access→non-GPL_modules_cannot_use_EXPORT_SYMBOL_GPL_functions*/
-MODULE_AUTHOR("User");     /*LINE14:author_metadata→visible_in_modinfo_output*/
-MODULE_DESCRIPTION("NUMA Zone Trace"); /*LINE15:description_metadata*/
-/*LINE16:PROBLEM:User_must_trace_real_node_and_zone_values_by_hand_before_running_module→Use_worksheet_lines_01-70_as_reference*/
+/*L01:AXIOM:C_language_requires_#include_before_using_symbols→#include_copies_header_file_content_into_this_file*/
+/*L02:AXIOM:Kernel_modules_require_MODULE_LICENSE→without_it_kernel_marks_module_as_tainted→restricts_symbol_access*/
+/*L03:AXIOM:linux/module.h_provides:MODULE_LICENSE,MODULE_AUTHOR,MODULE_DESCRIPTION,module_init,module_exit→these_are_macros*/
+/*L04:USING_L03:Include_linux/module.h_to_get_MODULE_LICENSE_macro*/
+#include <linux/module.h>
+/*L05:AXIOM:printk=kernel_printf→writes_to_ring_buffer→dmesg_reads_ring_buffer*/
+/*L06:AXIOM:linux/kernel.h_provides_printk*/
+/*L07:USING_L06:Include_linux/kernel.h_to_get_printk*/
+#include <linux/kernel.h>
+/*L08:AXIOM:__init=section_attribute→code_placed_in_.init.text_section→kernel_frees_this_section_after_boot→saves_RAM*/
+/*L09:AXIOM:__exit=section_attribute→code_for_module_unload*/
+/*L10:AXIOM:linux/init.h_provides___init_and___exit*/
+/*L11:USING_L10:Include_linux/init.h_to_get___init*/
+#include <linux/init.h>
+/*L12:AXIOM:Page=4096_contiguous_bytes_of_physical_RAM→from_worksheet_line06*/
+/*L13:AXIOM:PFN=Page_Frame_Number=physical_address÷4096→from_worksheet_line08*/
+/*L14:AXIOM:struct_page=64_byte_structure_describing_one_physical_page→from_worksheet_line_implied*/
+/*L15:AXIOM:linux/mm.h_provides:struct_page,page_to_pfn(),page_zone(),page_to_nid()*/
+/*L16:USING_L15:Include_linux/mm.h_to_get_page_functions*/
+#include <linux/mm.h>
+/*L17:AXIOM:alloc_page(gfp)=allocates_one_page→returns_struct_page*_or_NULL*/
+/*L18:AXIOM:GFP_KERNEL=0xCC0=allocation_flags_allowing_sleep→from_bootmem_trace_worksheet*/
+/*L19:AXIOM:linux/gfp.h_provides:alloc_page,GFP_KERNEL*/
+/*L20:USING_L19:Include_linux/gfp.h_to_get_alloc_page*/
+#include <linux/gfp.h>
+/*L21:AXIOM:NUMA=Non-Uniform_Memory_Access→multiple_CPU_sockets→each_socket_has_local_RAM→from_worksheet_line15*/
+/*L22:AXIOM:Node=contiguous_RAM_attached_to_one_CPU_socket→from_worksheet_line13*/
+/*L23:AXIOM:pg_data_t=structure_describing_one_NUMA_node→contains:node_start_pfn,node_spanned_pages,node_present_pages*/
+/*L24:AXIOM:NODE_DATA(nid)=macro_returning_pg_data_t*_for_node_nid*/
+/*L25:AXIOM:Zone=RAM_region_with_address_constraints:DMA<16MB,DMA32<4GB,Normal≥4GB→from_worksheet_lines27-43*/
+/*L26:AXIOM:struct_zone=structure_describing_one_zone→contains:zone_start_pfn,spanned_pages,present_pages,name*/
+/*L27:AXIOM:linux/mmzone.h_provides:pg_data_t,struct_zone,NODE_DATA,pageblock_order,pageblock_nr_pages*/
+/*L28:USING_L27:Include_linux/mmzone.h_to_get_node_and_zone_structures*/
+#include <linux/mmzone.h>
+/*L29:AXIOM:for_each_online_node(nid)=macro→iterates_over_online_NUMA_nodes→from_worksheet_line55-57*/
+/*L30:AXIOM:num_online_nodes()=function_returning_count_of_online_nodes*/
+/*L31:AXIOM:linux/nodemask.h_provides:for_each_online_node,num_online_nodes*/
+/*L32:USING_L31:Include_linux/nodemask.h_to_get_node_iteration_macros*/
+#include <linux/nodemask.h>
+/*L33:USING_L02,L03:MODULE_LICENSE("GPL")→tells_kernel_this_module_is_GPL_licensed*/
+MODULE_LICENSE("GPL");
+/*L34:USING_L03:MODULE_AUTHOR→metadata_visible_in_modinfo*/
+MODULE_AUTHOR("User");
+/*L35:USING_L03:MODULE_DESCRIPTION→metadata_visible_in_modinfo*/
+MODULE_DESCRIPTION("NUMA Zone Trace");
+/*L36:DEFINITION:init_function=called_when_insmod_loads_module→returns_0_on_success,negative_on_error*/
+/*L37:USING_L08,L36:__init_marks_function_for_init_section*/
 static int __init numa_zone_init(void)
 {
-    /*LINE17:STACK_LAYOUT:function_prologue→push_rbp→mov_rsp,rbp→sub_rsp,N→local_variables_on_stack*/
-    /*LINE18:DRAW_STACK[rbp-8:page(8bytes)=???|rbp-16:pfn(8bytes)=???|rbp-20:nid(4bytes)=???|rbp-24:zone_ptr(8bytes)=???]*/
-    struct page *page;     /*LINE19:page=pointer_to_struct_page(64bytes)→TODO_USER:CALCULATE:sizeof(struct_page)=___bytes*/
-    unsigned long pfn;     /*LINE20:pfn=unsigned_long=8bytes_on_x86_64→stores_Page_Frame_Number*/
-    int nid;               /*LINE21:nid=node_id=int=4bytes→this_machine:nid=0_only(from_worksheet_line10)*/
-    struct zone *zone;     /*LINE22:zone=pointer_to_struct_zone→contains_zone_start_pfn,spanned_pages,name*/
-    printk(KERN_INFO "NUMA_ZONE:init_start\n"); /*LINE23:printk→kernel_printf→KERN_INFO="6"→priority_level*/
-    /*LINE24:TODO_USER:Before_proceeding→run:`numactl --hardware`→verify_output_matches_worksheet_line10,18,19*/
-    /*LINE25:num_online_nodes():TRACE→reads_node_states[N_ONLINE]_bitmask→counts_set_bits→returns_count*/
-    /*LINE26:TODO_USER:PREDICT:num_online_nodes()=___→based_on_worksheet_line10*/
-    printk(KERN_INFO "NUMA_ZONE:num_online_nodes=%d\n", num_online_nodes());
-    /*LINE27:for_each_online_node(nid):EXPANSION→for_each_node_state(nid,N_ONLINE)→for_each_node_mask(nid,node_states[N_ONLINE])→iterates_bits*/
-    /*LINE28:TRACE:node_states[N_ONLINE]=bitmask→this_machine:0b0001(1_node)→loop_body_executes_once_with_nid=0*/
+    /*L38:AXIOM:Local_variables_live_on_stack→stack_grows_downward_on_x86_64→rbp=base_pointer*/
+    /*L39:USING_L14:struct_page*=pointer=8_bytes_on_x86_64*/
+    struct page *page;
+    /*L40:USING_L13:unsigned_long=8_bytes→stores_PFN_value*/
+    unsigned long pfn;
+    /*L41:USING_L22:int=4_bytes→stores_node_id→this_machine:nid∈{0}*/
+    int nid;
+    /*L42:USING_L26:struct_zone*=pointer=8_bytes→points_to_zone_structure*/
+    struct zone *zone;
+    /*L43:USING_L05:printk_with_KERN_INFO_logs_to_dmesg*/
+    printk(KERN_INFO "NUMA_ZONE:init\n");
+    /*L44:USING_L30:Call_num_online_nodes()→returns_count*/
+    /*L45:AXIOM:This_machine_has_1_node→from_worksheet_line10→expected_output:1*/
+    /*L46:TODO_USER:PREDICT_before_running:num_online_nodes()=___*/
+    printk(KERN_INFO "NUMA_ZONE:nodes=%d\n", num_online_nodes());
+    /*L47:USING_L29:for_each_online_node(nid)→loop_iterates_nid=0_only_on_this_machine*/
     for_each_online_node(nid) {
-        /*LINE29:NODE_DATA(nid):TRACE→returns_pg_data_t*→on_UMA_system:returns_&contig_page_data→on_NUMA:returns_node_data[nid]*/
-        pg_data_t *pgdat = NODE_DATA(nid); /*LINE30:pgdat=pointer_to_node_descriptor→contains_node_start_pfn,node_spanned_pages*/
-        /*LINE31:TODO_USER:PREDICT→pgdat->node_start_pfn=___→first_PFN_in_node→usually_0_or_1*/
-        /*LINE32:TODO_USER:PREDICT→pgdat->node_spanned_pages≈___→from_worksheet_line22:3944424_or_similar*/
-        /*LINE33:TRAP:node_spanned_pages_includes_holes→node_present_pages_excludes_holes→spanned≥present*/
-        printk(KERN_INFO "NUMA_ZONE:node[%d]:start_pfn=%lu,spanned=%lu,present=%lu\n",
+        /*L48:USING_L24:NODE_DATA(0)→returns_pg_data_t*_for_node_0*/
+        pg_data_t *pgdat = NODE_DATA(nid);
+        /*L49:USING_L23:pgdat->node_start_pfn=first_PFN_in_node*/
+        /*L50:USING_L23:pgdat->node_spanned_pages=total_PFNs_including_holes*/
+        /*L51:USING_L23:pgdat->node_present_pages=usable_PFNs_excluding_holes*/
+        /*L52:TODO_USER:PREDICT:node_start_pfn=___,spanned≈___,present≈___*/
+        printk(KERN_INFO "NUMA_ZONE:node[%d]:start=%lu,span=%lu,present=%lu\n",
                nid, pgdat->node_start_pfn, pgdat->node_spanned_pages, pgdat->node_present_pages);
-        /*LINE34:TODO_USER:After_insmod→check_dmesg→compare_values_with_worksheet_predictions*/
     }
-    /*LINE35:alloc_page(GFP_KERNEL):TRACE→alloc_page=macro→alloc_pages(gfp,0)→order=0=1_page*/
-    /*LINE36:GFP_KERNEL=0xCC0(from_bootmem_trace_worksheet)→can_sleep,can_do_IO,can_use_FS*/
-    /*LINE37:TODO_USER:CALCULATE:GFP_KERNEL=__GFP_RECLAIM|__GFP_IO|__GFP_FS=0x___*/
+    /*L53:USING_L17,L18:alloc_page(GFP_KERNEL)→allocates_1_page→returns_struct_page**/
     page = alloc_page(GFP_KERNEL);
-    if (!page) { /*LINE38:NULL_check:alloc_page_returns_NULL_on_failure→happens_when_no_free_pages*/
-        printk(KERN_ERR "NUMA_ZONE:alloc_failed\n");
-        return -ENOMEM; /*LINE39:-ENOMEM=-12→defined_in_include/uapi/asm-generic/errno-base.h*/
+    /*L54:AXIOM:NULL=0x0=invalid_pointer→alloc_page_returns_NULL_on_failure*/
+    if (!page) {
+        printk(KERN_ERR "NUMA_ZONE:alloc_fail\n");
+        /*L55:AXIOM:ENOMEM=12→defined_in_errno.h→-ENOMEM=-12=out_of_memory_error*/
+        return -ENOMEM;
     }
-    /*LINE40:page_to_pfn(page):TRACE→(page-vmemmap)/sizeof(struct_page)→vmemmap=0xffffXXXX(architecture_dependent)*/
-    /*LINE41:TODO_USER:CALCULATE:if_page=0xfffff895054a1480_and_vmemmap=0xfffff89500000000→pfn=(0xfffff895054a1480-0xfffff89500000000)/64=___*/
+    /*L56:USING_L15:page_to_pfn(page)→calculates:(page-vmemmap)/64→returns_PFN*/
+    /*L57:TODO_USER:After_insmod→note_pfn_value→CALCULATE:pfn×4096=physical_address*/
     pfn = page_to_pfn(page);
-    /*LINE42:page_to_nid(page):TRACE→reads_page->flags→extracts_node_bits→returns_node_id*/
-    /*LINE43:TODO_USER:PREDICT:page_to_nid(page)=___→this_machine_has_1_node→nid=___*/
+    /*L58:USING_L15:page_to_nid(page)→extracts_node_id_from_page->flags*/
+    /*L59:TODO_USER:PREDICT:nid=___→this_machine_has_1_node→nid=0*/
     nid = page_to_nid(page);
-    /*LINE44:page_zone(page):TRACE→reads_page->flags→extracts_zone_bits→returns_struct_zone**/
+    /*L60:USING_L15:page_zone(page)→extracts_zone_id_from_page->flags→returns_struct_zone**/
     zone = page_zone(page);
-    /*LINE45:zone->name:string_identifying_zone→"DMA"_or_"DMA32"_or_"Normal"*/
-    /*LINE46:TODO_USER:PREDICT:zone->name="___"→based_on_pfn_value_and_worksheet_line46*/
-    printk(KERN_INFO "NUMA_ZONE:page:pfn=0x%lx(%lu),node=%d,zone=%s\n", pfn, pfn, nid, zone->name);
-    /*LINE47:zone->zone_start_pfn:first_PFN_in_this_zone→from_worksheet:DMA=0,DMA32=4096,Normal=1048576*/
-    /*LINE48:TODO_USER:Based_on_zone->name→predict_zone->zone_start_pfn=___*/
-    printk(KERN_INFO "NUMA_ZONE:%s:start_pfn=%lu,spanned=%lu,present=%lu\n",
-           zone->name, zone->zone_start_pfn, zone->spanned_pages, zone->present_pages);
-    /*LINE49:pageblock_order:TRACE→defined_at_compile_time→x86_64=9→pageblock_nr_pages=2^9=512*/
-    /*LINE50:TODO_USER:VERIFY→grep_CONFIG_PAGEBLOCK_ORDER_in_kernel_config_or_accept_default=9*/
-    printk(KERN_INFO "NUMA_ZONE:pageblock_order=%d,pageblock_nr_pages=%lu\n", pageblock_order, pageblock_nr_pages);
-    /*LINE51:PFN_to_physical:phys=pfn×4096=pfn<<12→from_worksheet_line66-67*/
-    /*LINE52:TODO_USER:CALCULATE→pfn_value_from_dmesg×4096=0x___→verify_matches_output*/
-    printk(KERN_INFO "NUMA_ZONE:phys=pfn*4096=0x%lx*0x1000=0x%llx\n", pfn, (unsigned long long)pfn * PAGE_SIZE);
-    /*LINE53:ZONE_MEMBERSHIP_CHECK:pfn>=zone_start_pfn?→pfn<zone_end_pfn?→from_worksheet_line46*/
-    /*LINE54:TODO_USER:FILL_CALCULATION→pfn=___,zone_start=___,zone_end=___→is_pfn_in_range?*/
-    printk(KERN_INFO "NUMA_ZONE:zone_check:pfn=%lu>=start=%lu?%s,pfn<%lu?%s\n",
-           pfn, zone->zone_start_pfn, pfn >= zone->zone_start_pfn ? "Y" : "N",
-           zone->zone_start_pfn + zone->spanned_pages,
-           pfn < zone->zone_start_pfn + zone->spanned_pages ? "Y" : "N");
-    /*LINE55:CLEANUP:put_page(page)→decrements_refcount→if_refcount=0→page_freed*/
-    /*LINE56:TODO_USER:TRACE→before_put:refcount=___→after_put:refcount=___→freed?___*/
+    /*L61:USING_L26:zone->name=string:"DMA"_or_"DMA32"_or_"Normal"*/
+    /*L62:USING_worksheet_L46:Zone_determined_by:PFN<4096→DMA,4096≤PFN<1048576→DMA32,PFN≥1048576→Normal*/
+    /*L63:TODO_USER:PREDICT:If_pfn≈1000000_or_larger→zone="Normal"*/
+    printk(KERN_INFO "NUMA_ZONE:pfn=0x%lx(%lu),nid=%d,zone=%s\n", pfn, pfn, nid, zone->name);
+    /*L64:USING_L26:zone->zone_start_pfn=first_PFN_in_zone*/
+    /*L65:TODO_USER:VERIFY:If_zone="Normal"→start_pfn=1048576(from_worksheet_L44)*/
+    printk(KERN_INFO "NUMA_ZONE:%s:start=%lu,span=%lu\n", zone->name, zone->zone_start_pfn, zone->spanned_pages);
+    /*L66:USING_L27:pageblock_order=compile-time_constant→x86_64=9*/
+    /*L67:USING_L27:pageblock_nr_pages=2^pageblock_order→from_worksheet_L60:2^9=512*/
+    /*L68:TODO_USER:VERIFY:pageblock_order=9→pageblock_nr_pages=512*/
+    printk(KERN_INFO "NUMA_ZONE:pageblock_order=%d,nr_pages=%lu\n", pageblock_order, pageblock_nr_pages);
+    /*L69:USING_L12:PAGE_SIZE=4096→physical_address=pfn×4096=pfn<<12*/
+    /*L70:TODO_USER:CALCULATE:Take_pfn_from_output→multiply_by_4096→verify_hex_value*/
+    printk(KERN_INFO "NUMA_ZONE:phys=0x%llx\n", (unsigned long long)pfn * PAGE_SIZE);
+    /*L71:AXIOM:put_page(page)→decrements_refcount→if_refcount_reaches_0→page_freed*/
+    /*L72:USING_L71:This_page_was_allocated_with_refcount=1→put_page→refcount=0→freed*/
     put_page(page);
-    printk(KERN_INFO "NUMA_ZONE:init_complete\n");
+    printk(KERN_INFO "NUMA_ZONE:done\n");
     return 0;
 }
+/*L73:USING_L09:__exit_marks_function_for_exit_section*/
 static void __exit numa_zone_exit(void)
 {
-    printk(KERN_INFO "NUMA_ZONE:exit\n"); /*LINE57:cleanup_function→called_on_rmmod*/
+    printk(KERN_INFO "NUMA_ZONE:exit\n");
 }
-module_init(numa_zone_init); /*LINE58:module_init→tells_kernel_to_call_numa_zone_init_on_insmod*/
-module_exit(numa_zone_exit); /*LINE59:module_exit→tells_kernel_to_call_numa_zone_exit_on_rmmod*/
-/*LINE60:VERIFICATION_COMMANDS→run_after_saving_file:*/
-/*LINE61:make_clean_&&_make→compiles_module*/
-/*LINE62:sudo_insmod_numa_zone_trace.ko→loads_module→triggers_init_function*/
-/*LINE63:sudo_dmesg_|_grep_NUMA_ZONE→shows_output→compare_with_worksheet_predictions*/
-/*LINE64:sudo_rmmod_numa_zone_trace→unloads_module*/
-/*LINE65:BUG_TO_FIX:None_intentional→but_user_should_verify_all_TODO_predictions_match_actual_output*/
+/*L74:USING_L03:module_init()→registers_init_function→kernel_calls_it_on_insmod*/
+module_init(numa_zone_init);
+/*L75:USING_L03:module_exit()→registers_exit_function→kernel_calls_it_on_rmmod*/
+module_exit(numa_zone_exit);
+/*L76:---VIOLATION_CHECK---*/
+/*L77:NEW_THINGS_INTRODUCED_WITHOUT_FULL_DERIVATION:*/
+/*L78:V1:L14:sizeof(struct_page)=64→stated_without_showing_pahole_or_source*/
+/*L79:V2:L23:pg_data_t_fields→stated_without_showing_struct_definition_from_mmzone.h*/
+/*L80:V3:L26:struct_zone_fields→stated_without_showing_struct_definition*/
+/*L81:V4:L54:NULL=0x0→stated_without_deriving_from_stddef.h*/
+/*L82:V5:L56:vmemmap_value→referenced_but_not_computed_for_this_machine*/
+/*L83:V6:L66:pageblock_order=9→stated_as_axiom_but_not_verified_via_grep*/
+/*L84:FIX_REQUIRED:User_must_verify_each_violation_by_running_appropriate_command*/
