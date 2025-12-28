@@ -1066,3 +1066,252 @@ socket page:  may have PG_slab, no PG_lru
 ```
 
 ---
+
+### Q14: YOUR DETAILED QUESTIONS ANSWERED
+
+---
+
+### Q14a: IS _MAPCOUNT SAME AS NUMBER OF PROCESSES?
+
+195. YOUR QUESTION: "_mapcount is same as number of process right"
+
+196. ANSWER: NO. _mapcount = number of PAGE TABLE ENTRIES, not processes.
+
+197. DRAW (one process, two mappings):
+```
+PROCESS A (PID 1000):
++------------------+
+| mm_struct        |
+| +--------------+ |
+| | VMA 1        | | → maps PFN 5000 at vaddr 0x1000
+| | VMA 2        | | → maps PFN 5000 at vaddr 0x2000 (same physical page!)
+| +--------------+ |
++------------------+
+
+struct page for PFN 5000:
+_mapcount = 1  (NOT 2 processes, BUT 2 PTEs pointing to it)
+           ↑
+           This is 0+1=2 mappings (remember _mapcount is count-1)
+           
+WAIT - I said 1 but meant:
+_mapcount = -1 + number_of_ptes
+If 2 PTEs point to page: _mapcount = -1 + 2 = 1
+If 1 PTE points to page: _mapcount = -1 + 1 = 0
+If 0 PTEs point to page: _mapcount = -1
+```
+
+198. SCENARIO: Same page shared by 2 processes:
+```
+PROCESS A: maps PFN 5000 at vaddr 0x1000  → 1 PTE
+PROCESS B: maps PFN 5000 at vaddr 0x3000  → 1 PTE
+TOTAL PTEs = 2
+_mapcount = 2 - 1 = 1
+
+BUT: 2 processes, 2 PTEs, _mapcount = 1
+_mapcount ≠ process count
+_mapcount = PTE count - 1
+```
+
+199. WHY NOT JUST COUNT PROCESSES?
+```
+Problem: One process can map same page multiple times (mmap with MAP_SHARED twice).
+Problem: Kernel needs to know when ALL mappings are gone, not just all processes.
+Solution: Count PTEs, not processes.
+```
+
+---
+
+### Q14b: WHY NEED _MAPCOUNT IF PAGE TABLES EXIST?
+
+200. YOUR QUESTION: "page tables are there per process for virtual to physical translation, why we need these in the first place"
+
+201. ANSWER: Page tables answer FORWARD question. _mapcount answers REVERSE question.
+
+202. DRAW:
+```
+FORWARD LOOKUP (page tables):
+Given: virtual address 0x1234000 in process A
+Find:  physical page (PFN)
+Method: Walk page table: CR3 → PML4 → PDPT → PD → PT → PFN
+ANSWER: PFN = 5000
+
+REVERSE LOOKUP (_mapcount, rmap):
+Given: physical page PFN 5000
+Find:  how many PTEs point to it? Who has it mapped?
+Method: Look at page->_mapcount
+ANSWER: 1 means 2 PTEs (or 2 processes, or 1 process twice)
+```
+
+203. WHY REVERSE IS NEEDED:
+```
+Scenario: Kernel wants to free page PFN 5000 (memory pressure).
+Step 1: Check page->_refcount. If > 1, someone using it.
+Step 2: Check page->_mapcount. If >= 0, someone has it mapped.
+Step 3: If mapped, must UNMAP from all page tables before freeing.
+        Kernel uses rmap (reverse mapping) to find all PTEs.
+Step 4: Unmap from all, then free.
+
+Without _mapcount: Kernel has to search ALL page tables of ALL processes 
+                   to find who maps PFN 5000. O(processes × PTEs) = SLOW.
+With _mapcount:    Instant check: _mapcount == -1 means unmapped.
+```
+
+---
+
+### Q14c: WHY PRIVATE IS 8 BYTES IF ORDER IS MAX 11?
+
+204. YOUR QUESTION: "order can be till 11 only, then why 8 bytes"
+
+205. ANSWER: private is REUSED for MANY purposes, not just buddy order.
+
+206. DRAW (private field reuse):
+```
+PRIVATE FIELD (8 bytes = 64 bits):
+
+CASE 1: Buddy allocator free page
+   private = order (0 to 10 or 11)
+   Needs only 4 bits, but stored as unsigned long
+   Source: mm/page_alloc.c:611: set_page_private(page, order)
+
+CASE 2: Filesystem buffer_head
+   private = pointer to struct buffer_head (8 bytes on x86_64)
+   Source: include/linux/buffer_head.h:183
+
+CASE 3: Swap cache
+   private = swap entry value (SWP_CONTINUED flag)
+   Source: mm/swapfile.c:3486
+
+CASE 4: zsmalloc (compressed memory)
+   private = pointer to zspage struct
+   Source: mm/zsmalloc.c:962
+
+CASE 5: Balloon pages (virtio)
+   private = pointer to balloon_dev_info
+   Source: include/linux/balloon_compaction.h:96
+```
+
+207. WHY 8 BYTES:
+```
+x86_64: sizeof(void*) = 8 bytes
+private stores POINTERS most of the time, not just order
+If private was 4 bytes: could not store 64-bit pointers
+Buddy order (4 bits) is the EXCEPTION, not the rule
+```
+
+208. SOURCE (include/linux/mm_types.h:518-520):
+```c
+#define page_private(page)          ((page)->private)
+static inline void set_page_private(struct page *page, unsigned long private)
+```
+
+---
+
+### Q14d: WHAT IS LRU FOR YOUR MACHINE?
+
+209. YOUR QUESTION: "what is lru in this case for my case"
+
+210. DEFINITION: LRU = Least Recently Used = doubly linked list for page reclaim.
+
+211. DRAW (lru field is struct list_head):
+```
+struct list_head {
+    struct list_head *next;  // 8 bytes
+    struct list_head *prev;  // 8 bytes
+};
+TOTAL: 16 bytes
+
+PURPOSE: Link page into one of several lists:
+- free_area[order].free_list  → free pages in buddy allocator
+- lruvec->lists[LRU_INACTIVE_ANON] → inactive anonymous pages
+- lruvec->lists[LRU_ACTIVE_ANON]   → active anonymous pages
+- lruvec->lists[LRU_INACTIVE_FILE] → inactive file pages
+- lruvec->lists[LRU_ACTIVE_FILE]   → active file pages
+```
+
+212. YOUR MACHINE (after malloc):
+```
+char *buf = malloc(4096);
+buf[0] = 'A';  // Page fault → allocate page
+
+Page lifecycle:
+1. alloc_page() → page removed from free_area[0].free_list
+2. Page added to LRU_ACTIVE_ANON list
+3. page->lru.next = next page in list
+4. page->lru.prev = previous page in list
+
+DRAW:
+lruvec->lists[LRU_ACTIVE_ANON]:
+    +-------+     +-------+     +-------+
+    | page1 | <-> | page2 | <-> | page3 |
+    | .lru  |     | .lru  |     | .lru  |
+    +-------+     +-------+     +-------+
+      ↑                             ↑
+      +--- circular list -----------+
+```
+
+213. WHY LRU MATTERS:
+```
+Memory pressure → kernel must free pages
+Which pages to free? Least Recently Used ones.
+Kernel walks LRU list from tail → finds old pages → evicts them.
+
+If page on LRU_ACTIVE_ANON: was accessed recently, less likely to evict
+If page on LRU_INACTIVE_ANON: not accessed, more likely to evict
+```
+
+214. CHECK YOUR LRU STATS:
+```bash
+cat /proc/vmstat | grep -E "^(nr_active_anon|nr_inactive_anon|nr_active_file|nr_inactive_file)"
+```
+
+---
+
+### Q14e: BUDDY ALLOCATOR RELEVANCE
+
+215. WHERE BUDDY USES THESE FIELDS:
+
+216. DRAW:
+```
+FREE PAGE IN BUDDY ALLOCATOR:
++----------+----------------------------------------------+
+| FIELD    | VALUE                                        |
++----------+----------------------------------------------+
+| flags    | PG_buddy set (bit 6 typically)               |
++----------+----------------------------------------------+
+| _refcount| 0 (no one using it, it's free)               |
++----------+----------------------------------------------+
+| _mapcount| -1 (not mapped)                              |
++----------+----------------------------------------------+
+| mapping  | NULL or garbage (not used for free pages)    |
++----------+----------------------------------------------+
+| index    | not used                                     |
++----------+----------------------------------------------+
+| private  | ORDER (0, 1, 2, ... 10)                      |
+|          | Source: set_buddy_order() in page_alloc.c:611|
++----------+----------------------------------------------+
+| lru      | Linked into free_area[order].free_list       |
++----------+----------------------------------------------+
+
+ALLOCATED PAGE (after alloc_page):
++----------+----------------------------------------------+
+| flags    | PG_buddy CLEARED                             |
++----------+----------------------------------------------+
+| _refcount| 1 (caller owns it)                           |
++----------+----------------------------------------------+
+| private  | 0 (cleared on allocation)                    |
+|          | Source: page_alloc.c:707                     |
++----------+----------------------------------------------+
+| lru      | Removed from free list, will be added to LRU |
++----------+----------------------------------------------+
+```
+
+217. SOURCE (mm/page_alloc.c:609-613):
+```c
+static inline void set_buddy_order(struct page *page, unsigned int order)
+{
+    set_page_private(page, order);  // private = order
+    __SetPageBuddy(page);           // flags |= PG_buddy
+}
+```
+
+---
