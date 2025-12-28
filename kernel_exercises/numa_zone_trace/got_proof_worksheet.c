@@ -186,10 +186,7 @@ int main(void) {
        *   libc_offset = 0x28000 = 163,840 decimal
        *   vm_pgoff = 163840 / 4096 = 40 pages
        */
-      sscanf(line, "%lx-%*lx %*s %lx" /* TODO BLOCK 02: replace "" with:
-                                         "%lx-%*lx %*s %lx" */
-             ,
-             &libc_start, &libc_offset);
+      sscanf(line, "%lx-%*lx %*s %lx", &libc_start, &libc_offset);
 
       printf("03. libc r-xp VMA: start=0x%lx, offset=0x%lx\n", libc_start,
              libc_offset);
@@ -201,26 +198,57 @@ int main(void) {
   /* ═══════════════════════════════════════════════════════════════════════════
    * STEP 3: Calculate expected printf vaddr
    *
+   * CORRECTED MODEL (VMA does NOT read file, kernel does on #PF):
+   * ┌───────────────────────────────────────────────────────────────────────────┐
+   * │ KERNEL MEMORY: struct vm_area_struct at 0xFFFF888012340000 │ │ ├──
+   * vm_start = 0x760cee228000 (first valid vaddr)                         │ │
+   * ├── vm_end = 0x760cee3b0000 (last vaddr + 1)                              │
+   * │ ├── vm_pgoff = 40 (when #PF at vm_start, kernel reads file page 40) │ │
+   * ├── vm_file = 0xFFFF888099990000 (pointer to struct file for libc.so.6)   │
+   * │ └── vm_mm = 0xFFFF888055550000 (pointer to process mm_struct) │
+   * └───────────────────────────────────────────────────────────────────────────┘
+   *
+   * PAGE FAULT TRACE when CPU accesses vaddr 0x760cee260100 (printf):
+   * 01. CPU at RIP tries to execute instruction at vaddr 0x760cee260100
+   * 02. MMU walks page table: CR3 → PML4 → PDPT → PD → PT → PTE not present
+   * 03. MMU triggers #PF exception → CPU saves RIP, jumps to interrupt 14
+   * handler 04. Kernel page fault handler reads fault_address = 0x760cee260100
+   * 05. Kernel searches mm->mmap (VMA tree): find VMA where vm_start ≤
+   * 0x760cee260100 < vm_end 06. Found VMA at 0xFFFF888012340000: 0x760cee228000
+   * ≤ 0x760cee260100 < 0x760cee3b0000 ✓ 07. Kernel calculates file_page =
+   * vm_pgoff + (fault_addr - vm_start) / 4096 = 40 + (0x760cee260100 -
+   * 0x760cee228000) / 4096 = 40 + 0x38100 / 4096 = 40 + 229632 / 4096 = 40
+   * + 56.0625 → floor → 40 + 56 = 96 08. Kernel calls filemap_fault() → reads
+   * file page 96 from disk (or page cache) 09. File page 96 = bytes 96×4096 to
+   * 96×4096+4095 = bytes 393216 to 397311 of libc.so.6
+   * 10. printf @ file offset 0x60100 = 393472 → 393472 is in [393216, 397311] ✓
+   * 11. Kernel allocates physical page → PFN = 0x5000 (example)
+   * 12. Kernel copies libc.so.6 bytes 393216-397311 to RAM at PFN×4096 =
+   * 0x5000000
+   * 13. Kernel creates PTE: vaddr 0x760cee260000 → PFN 0x5000 → flags =
+   * present|user|execute
+   * 14. Kernel returns from #PF → CPU retries instruction at 0x760cee260100 →
+   * now PTE present
+   * 15. MMU translates: 0x760cee260100 → physical 0x5000000 + 0x100 = 0x5000100
+   * 16. CPU fetches instruction bytes from RAM at physical 0x5000100 → printf
+   * code executes
+   *
    * FORMULA: vaddr = libc_start + (file_offset - vm_pgoff_bytes)
    *
-   * WHY THIS FORMULA?
-   *   libc_start = where r-xp VMA begins in virtual memory
-   *   file_offset = where printf is in the file (0x60100)
-   *   vm_pgoff_bytes = where VMA starts reading file (0x28000)
-   *   Difference = how far printf is from VMA start in file
-   *   vaddr = VMA start + that difference
+   * DERIVATION:
+   *   vm_pgoff_bytes = vm_pgoff × 4096 = 40 × 4096 = 163840 = 0x28000
+   *   file_offset = 0x60100 = 393472 (printf position in libc file)
+   *   offset_within_vma = file_offset - vm_pgoff_bytes = 393472 - 163840 =
+   * 229632 = 0x38100 vaddr = vm_start + offset_within_vma = 0x760cee228000 +
+   * 0x38100 = 0x760cee260100
    *
-   * NUMERICAL TRACE (printf):
-   *   libc_start = 0x760cee228000
-   *   printf_offset = 0x60100 = 393472
-   *   vm_pgoff_bytes = 0x28000 = 163840
-   *   Step A: 393472 - 163840 = 229632 = 0x38100
-   *   Step B: 0x760cee228000 + 0x38100 = 0x760cee260100
-   *
-   * NUMERICAL TRACE (scanf):
-   *   scanf_offset = 0x662a0 = 418464
-   *   Step A: 418464 - 163840 = 254624 = 0x3E2A0
-   *   Step B: 0x760cee228000 + 0x3E2A0 = 0x760cee2662a0
+   * SCANF EXAMPLE (harder, verify same formula):
+   *   file_offset = 0x662a0 = 418464
+   *   offset_within_vma = 418464 - 163840 = 254624 = 0x3E2A0
+   *   file_page = vm_pgoff + offset_within_vma / 4096 = 40 + 254624 / 4096 = 40
+   * + 62.17... = 40 + 62 = 102 vaddr = 0x760cee228000 + 0x3E2A0 =
+   * 0x760cee2662a0 scanf @ file page 102, byte offset within page = 254624 %
+   * 4096 = 254624 - 62×4096 = 254624 - 253952 = 672
    */
 
   /* TODO BLOCK 03: Calculate expected_printf
@@ -233,8 +261,8 @@ int main(void) {
    *   PRINTF_OFFSET - libc_offset = ???
    *   libc_start + ??? = ???
    */
-  expected_printf = 0 /* TODO BLOCK 03: replace 0 with: libc_start +
-                         (PRINTF_OFFSET - libc_offset) */
+  expected_printf = PRINTF_OFFSET - libc_offset /* TODO BLOCK 03: replace 0
+                         with: libc_start + (PRINTF_OFFSET - libc_offset) */
       ;
 
   /* TODO BLOCK 04: Calculate expected_scanf
@@ -247,8 +275,8 @@ int main(void) {
    *   SCANF_OFFSET - libc_offset = ???
    *   libc_start + ??? = ???
    */
-  expected_scanf = 0 /* TODO BLOCK 04: replace 0 with: libc_start +
-                        (SCANF_OFFSET - libc_offset) */
+  expected_scanf = SCANF_OFFSET - libc_offset /* TODO BLOCK 04: replace 0 with:
+                         libc_start + (SCANF_OFFSET - libc_offset) */
       ;
 
   /* ═══════════════════════════════════════════════════════════════════════════
