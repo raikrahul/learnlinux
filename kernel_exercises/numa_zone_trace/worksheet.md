@@ -330,3 +330,102 @@ ALL OWNED BY NODE 0 (single NUMA node):
 ```
 
 ---
+
+### Q8: WHERE IS VMEMMAP PHYSICALLY STORED? WHAT IF IT'S ON A DIFFERENT NODE?
+
+101. WHY THIS DIAGRAM: You asked "what if this virtual address belonged to a different cpu" - you're asking where the vmemmap array itself lives.
+
+102. PROBLEM RESTATEMENT: vmemmap is a virtual address (0xFFFFEA0000000000). But the struct page data must be stored SOMEWHERE in physical RAM. Which node's RAM?
+
+103. DRAW (OLD NAIVE DESIGN - BAD):
+```
+2-NODE SERVER, vmemmap stored entirely on Node 0:
+
+NODE 0 PHYSICAL RAM:                     NODE 1 PHYSICAL RAM:
+|--vmemmap array (240 MB)--|--other--|   |--user data--|--user data--|
+   Contains struct page                    No vmemmap here
+   for PFN 0 to 2000000
+   
+PROBLEM: CPU 1 wants struct page for PFN 1500000 (which is on Node 1).
+         CPU 1 reads vmemmap[1500000].
+         vmemmap is on Node 0's RAM.
+         CPU 1 must travel through interconnect → Node 0 → get data → return.
+         EVERY struct page access from CPU 1 = REMOTE ACCESS = SLOW.
+```
+
+104. THIS IS BAD BECAUSE: vmemmap is accessed VERY frequently. Every alloc_page, free_page, page fault reads vmemmap. If vmemmap on remote node = constant slow access.
+
+105. DRAW (MODERN DESIGN - GOOD - VMEMMAP_SPLIT):
+```
+2-NODE SERVER, vmemmap distributed across nodes:
+
+NODE 0 PHYSICAL RAM:                     NODE 1 PHYSICAL RAM:
+|--vmemmap[0..999999]--|--other--|        |--vmemmap[1000000..1999999]--|--other--|
+   struct page for Node 0 PFNs              struct page for Node 1 PFNs
+   96 MB on Node 0                          96 MB on Node 1
+   
+CPU 0 accesses vmemmap[500000] → LOCAL (Node 0 RAM) → FAST
+CPU 1 accesses vmemmap[1500000] → LOCAL (Node 1 RAM) → FAST
+CPU 0 accesses vmemmap[1500000] → REMOTE (Node 1 RAM) → SLOW (but rare)
+```
+
+106. ANSWER: Modern kernels use SPARSE_VMEMMAP. vmemmap is split so that struct page for each node is stored in THAT node's RAM.
+
+107. CALCULATION: Your machine has 3944069 pages × 64 bytes = 252420416 bytes = 240 MB vmemmap. With 1 node, all 240 MB is on Node 0. With 2 nodes (50/50 split), each node would store ~120 MB.
+
+108. KERNEL CONFIG: CONFIG_SPARSEMEM_VMEMMAP=y. This enables distributed vmemmap. Source: `grep SPARSEMEM /boot/config-$(uname -r)`.
+
+109. DRAW (DOUBLE INDIRECTION):
+```
+SCENARIO: CPU 0 on Node 0 needs to access page data at PFN 1500000 (on Node 1).
+
+STEP 1: CPU 0 computes vmemmap address:
+        vaddr = 0xFFFFEA0000000000 + 1500000 × 64 = 0xFFFFEA0005B8D800
+
+STEP 2: CPU 0's MMU translates 0xFFFFEA0005B8D800:
+        Page table lookup → finds physical address.
+
+STEP 3: Physical address of vmemmap[1500000] = 0x??????? (on Node 1).
+        This is where the struct page is stored.
+
+STEP 4: Memory request goes:
+        CPU 0 → L1 cache miss → L2 cache miss → L3 cache miss →
+        → interconnect → Node 1 memory controller →
+        → Node 1 RAM → data flows back → CPU 0 gets struct page.
+
+PROBLEM: Two potential remote accesses:
+  A) Reading vmemmap entry itself (struct page data) - can be remote
+  B) Reading the actual page data the struct page describes - can be remote
+  
+With SPARSE_VMEMMAP: (A) is local if PFN belongs to local node.
+Without SPARSE_VMEMMAP: (A) is always on Node 0 = BAD for Node 1 CPUs.
+```
+
+110. ANSWER TO YOUR SPECIFIC QUESTION:
+```
+Q: "What if the base address of physical page was on a different node?"
+
+A: There are TWO levels:
+   LEVEL 1: Where is struct page stored? (vmemmap location)
+   LEVEL 2: Where is actual page data stored? (the 4096-byte page itself)
+
+   Example: PFN 1500000 is on Node 1.
+   
+   With SPARSE_VMEMMAP:
+   - struct page for PFN 1500000 stored on Node 1 (local to PFN)
+   - Actual 4096 bytes at PFN 1500000 stored on Node 1
+   
+   CPU 0 accessing PFN 1500000:
+   - Step 1: Read struct page → goes to Node 1 RAM → REMOTE → slow
+   - Step 2: Read page data → goes to Node 1 RAM → REMOTE → slow
+   Both are remote because PFN 1500000 belongs to Node 1.
+   
+   CPU 1 accessing PFN 1500000:
+   - Step 1: Read struct page → goes to Node 1 RAM → LOCAL → fast
+   - Step 2: Read page data → goes to Node 1 RAM → LOCAL → fast
+   Both are local because CPU 1 is on Node 1.
+```
+
+111. WHY KERNEL DOES THIS: Kernel tries to allocate memory from local node. If your process runs on CPU 1, alloc_page() prefers Node 1. This minimizes remote access.
+
+---
