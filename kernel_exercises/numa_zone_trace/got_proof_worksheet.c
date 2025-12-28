@@ -198,17 +198,42 @@ int main(void) {
   /* ═══════════════════════════════════════════════════════════════════════════
    * STEP 3: Calculate expected printf vaddr
    *
-   * CORRECTED MODEL (VMA does NOT read file, kernel does on #PF):
+   * CRITICAL: mm_struct IS PER PROCESS (proven on your machine 2025-12-28):
    * ┌───────────────────────────────────────────────────────────────────────────┐
-   * │ KERNEL MEMORY: struct vm_area_struct at 0xFFFF888012340000 │ │ ├──
-   * vm_start = 0x760cee228000 (first valid vaddr)                         │ │
-   * ├── vm_end = 0x760cee3b0000 (last vaddr + 1)                              │
-   * │ ├── vm_pgoff = 40 (when #PF at vm_start, kernel reads file page 40) │ │
-   * ├── vm_file = 0xFFFF888099990000 (pointer to struct file for libc.so.6)   │
-   * │ └── vm_mm = 0xFFFF888055550000 (pointer to process mm_struct) │
+   * │ ./mm_per_process_proof output: │ │ PARENT (PID=94519):
+   * vaddr=0x777bc6c28000, inode=5160837                   │ │ CHILD
+   * (PID=94520): vaddr=0x777bc6c28000, inode=5160837                   │ │ │ │
+   * SAME inode=5160837 → SAME libc.so.6 file on disk                          │
+   * │ SAME vaddr → ASLR inherited from parent at fork (dup_mm copies mm_struct)
+   * │ │ BUT: each process has SEPARATE mm_struct, SEPARATE page table, SEPARATE
+   * CR3│ │ │ │ HOW KERNEL KNOWS WHICH VMA TREE ON #PF: │ │   current = kernel
+   * global pointing to running task_struct                 │ │   current->mm =
+   * this process's mm_struct                                  │ │
+   * current->mm->mmap = this process's VMA tree (red-black tree)            │
+   * │   #PF handler: mm = current->mm; find_vma(mm, fault_addr); │
    * └───────────────────────────────────────────────────────────────────────────┘
    *
-   * PAGE FAULT TRACE when CPU accesses vaddr 0x760cee260100 (printf):
+   * VMA STRUCTURE (kernel memory):
+   * ┌───────────────────────────────────────────────────────────────────────────┐
+   * │ PID 94519 task_struct @ 0xFFFF888011110000 │ │ ├── mm =
+   * 0xFFFF888022220000 (PID 94519's mm_struct)                       │ │ │ ├──
+   * pgd = 0xFFFF888033330000 → loaded into CR3 when 94519 runs        │ │ │ └──
+   * mmap → VMA tree for 94519: libc VMA @ 0x777bc6c28000-0x777bc6db0000│ │ │
+   * ├── vm_start = 0x777bc6c28000                               │ │ │ ├──
+   * vm_end = 0x777bc6db0000                                 │ │ │ ├── vm_pgoff
+   * = 40                                           │ │ │             ├──
+   * vm_file → struct file for inode 5160837                 │ │ │ └── vm_mm =
+   * 0xFFFF888022220000 (back pointer to mm_struct)  │
+   * ├───────────────────────────────────────────────────────────────────────────┤
+   * │ PID 94520 task_struct @ 0xFFFF888044440000 (child, forked from 94519) │
+   * │ ├── mm = 0xFFFF888055550000 (PID 94520's mm_struct, SEPARATE from parent)
+   * │ │ │   ├── pgd = 0xFFFF888066660000 → loaded into CR3 when 94520 runs │ │
+   * │   └── mmap → VMA tree for 94520: libc VMA @
+   * 0x777bc6c28000-0x777bc6db0000│ │ │             (COPY of parent's VMA, same
+   * vaddrs, but SEPARATE structure) │
+   * └───────────────────────────────────────────────────────────────────────────┘
+   *
+   * PAGE FAULT TRACE when CPU accesses vaddr 0x777bc6c60100 (printf):
    * 01. CPU at RIP tries to execute instruction at vaddr 0x760cee260100
    * 02. MMU walks page table: CR3 → PML4 → PDPT → PD → PT → PTE not present
    * 03. MMU triggers #PF exception → CPU saves RIP, jumps to interrupt 14
@@ -261,9 +286,7 @@ int main(void) {
    *   PRINTF_OFFSET - libc_offset = ???
    *   libc_start + ??? = ???
    */
-  expected_printf = PRINTF_OFFSET - libc_offset /* TODO BLOCK 03: replace 0
-                         with: libc_start + (PRINTF_OFFSET - libc_offset) */
-      ;
+  expected_printf = libc_start + PRINTF_OFFSET - libc_offset;
 
   /* TODO BLOCK 04: Calculate expected_scanf
    *
@@ -275,9 +298,7 @@ int main(void) {
    *   SCANF_OFFSET - libc_offset = ???
    *   libc_start + ??? = ???
    */
-  expected_scanf = SCANF_OFFSET - libc_offset /* TODO BLOCK 04: replace 0 with:
-                         libc_start + (SCANF_OFFSET - libc_offset) */
-      ;
+  expected_scanf = libc_start + SCANF_OFFSET - libc_offset;
 
   /* ═══════════════════════════════════════════════════════════════════════════
    * STEP 4: Verify calculated == actual
