@@ -2680,3 +2680,215 @@ A3: NO. PTE is a VALUE (data). PTEs are stored at physical addresses in RAM.
 ```
 
 ---
+
+### Q22: HOW DOES KERNEL FIND "2 PTEs" FROM _MAPCOUNT?
+
+344. YOUR QUESTION: "_mapcount = 1 means 2 PTEs. How does kernel FIND which 2 PTEs? What if 10000s of processes?"
+
+345. ANSWER: _mapcount is just a NUMBER. It tells HOW MANY, not WHERE.
+    To find WHERE, kernel uses RMAP (Reverse Mapping).
+
+---
+
+### RMAP: REVERSE MAPPING SYSTEM
+
+346. PROBLEM:
+```
+Page PFN 0x12345 has _mapcount = 1 (meaning 2 PTEs).
+Kernel needs to unmap this page for swap/migration.
+How does kernel find those 2 PTEs?
+```
+
+347. SOLUTION: Kernel maintains a reverse mapping structure.
+
+---
+
+### FOR ANONYMOUS PAGES: anon_vma
+
+348. SOURCE: `/usr/src/linux-source-6.8.0/include/linux/rmap.h` line 17-30
+
+349. HOW IT WORKS:
+```
+struct page {
+    ...
+    struct address_space *mapping;  // For anon: anon_vma pointer | 0x1
+    ...
+};
+
+struct anon_vma {
+    struct rb_root_cached rb_root;  // Interval tree of anon_vma_chains
+    ...
+};
+
+struct anon_vma_chain {
+    struct vm_area_struct *vma;     // The VMA that maps this page
+    struct anon_vma *anon_vma;      // Pointer back to anon_vma
+    struct rb_node rb;              // For interval tree
+    ...
+};
+```
+
+350. DRAW:
+```
+Page (PFN 0x12345):
++------------------+
+| mapping = 0xA001 | → (0xA000 | 0x1) = anon_vma at 0xA000
+| _mapcount = 1    |
++------------------+
+         ↓
+anon_vma (at 0xA000):
++------------------+
+| rb_root          | → interval tree of all VMAs mapping pages in this anon_vma
++------------------+
+         ↓
++------------------+     +------------------+
+| anon_vma_chain 1 | --> | anon_vma_chain 2 |
+| vma = 0x1000     |     | vma = 0x2000     |
+| (Process A)      |     | (Process B)      |
++------------------+     +------------------+
+         ↓                        ↓
+VMA1 in Process A         VMA2 in Process B
+(contains PTE for page)   (contains PTE for page)
+```
+
+---
+
+### FOR FILE-BACKED PAGES: address_space
+
+351. HOW IT WORKS:
+```
+struct page {
+    ...
+    struct address_space *mapping;  // Points to file's address_space
+    pgoff_t index;                  // Offset in file (in pages)
+    ...
+};
+
+struct address_space {
+    struct rb_root_cached i_mmap;   // Interval tree of VMAs
+    ...
+};
+```
+
+352. DRAW:
+```
+Page (PFN 0x12345, file page):
++------------------+
+| mapping = 0xB000 | → address_space of file
+| index = 5        | → page 5 of file
+| _mapcount = 99   | → 100 processes map this page
++------------------+
+         ↓
+address_space (at 0xB000):
++------------------+
+| i_mmap           | → interval tree of all VMAs mapping this file
++------------------+
+         ↓
+   +--------+--------+--------+--------+
+   | VMA 1  | VMA 2  | VMA 3  | ...    | (100 VMAs from different processes)
+   +--------+--------+--------+--------+
+```
+
+---
+
+### HOW KERNEL WALKS RMAP (from rmap.h line 703-730)
+
+353. SOURCE:
+```c
+struct rmap_walk_control {
+    bool (*rmap_one)(struct folio *folio, struct vm_area_struct *vma,
+                     unsigned long addr, void *arg);
+    // ...
+};
+
+void rmap_walk(struct folio *folio, struct rmap_walk_control *rwc);
+```
+
+354. ALGORITHM:
+```
+rmap_walk(page):
+  if (page is anonymous):
+    anon_vma = page->mapping & ~0x1
+    for each anon_vma_chain in anon_vma->rb_root:
+      vma = anon_vma_chain->vma
+      addr = calculate vaddr from page->index and vma
+      pte = walk vma's page table to find PTE at addr
+      rmap_one(page, vma, addr, ...)  // Do something with this PTE
+  else (page is file-backed):
+    mapping = page->mapping
+    for each vma in mapping->i_mmap:
+      addr = calculate vaddr from page->index and vma->vm_pgoff
+      pte = walk vma's page table to find PTE at addr
+      rmap_one(page, vma, addr, ...)  // Do something with this PTE
+```
+
+---
+
+### 10000 PROCESSES SCENARIO
+
+355. YOUR QUESTION: "What if 10000s of processes?"
+
+356. ANSWER: This is handled by the interval trees.
+
+357. SCENARIO: /lib/libc.so mapped by 10000 processes
+```
+file: /lib/libc.so
+address_space->i_mmap: interval tree with 10000 VMAs
+
+When kernel needs to unmap page 5 of libc:
+1. Get page->mapping = address_space of libc
+2. Walk interval tree: O(log N + M) where M = VMAs containing page 5
+3. For each VMA, calculate vaddr and find PTE
+4. Modify PTE (set not-present, etc.)
+5. Total: O(log 10000 + M) = O(13 + M)
+```
+
+358. DRAW:
+```
+10000 processes map libc.so:
++--------------------------------+
+| address_space for libc.so      |
+| i_mmap = rb_root               |
+|   ├── VMA for process 1        |
+|   ├── VMA for process 2        |
+|   ├── VMA for process 3        |
+|   │   ...                      |
+|   └── VMA for process 10000    |
++--------------------------------+
+
+Kernel wants to unmap page 5:
+- Walk rb_tree to find all VMAs that include page 5
+- Each VMA has vm_pgoff, vm_start, vm_end
+- Calculate: vaddr = vm_start + (5 - vm_pgoff) * 4096
+- Walk that process's page table to find PTE
+- Modify PTE
+- Repeat for all 10000 VMAs
+```
+
+---
+
+### KEY INSIGHT
+
+359. _MAPCOUNT vs RMAP:
+```
+_mapcount: answers "HOW MANY PTEs?" in O(1)
+           Used for: quick check if page is shared, can be freed, etc.
+
+RMAP: answers "WHERE are those PTEs?" in O(log N + M)
+      Used for: actually modifying/unmapping those PTEs
+
+_mapcount is the COUNTER.
+RMAP is the INDEX.
+Both are needed.
+```
+
+360. SOURCE: `/usr/src/linux-source-6.8.0/include/linux/rmap.h` (763 lines)
+```
+Key functions:
+- rmap_walk()           - Walk all mappings of a page
+- try_to_unmap()        - Unmap page from all PTEs
+- try_to_migrate()      - Migrate page (update all PTEs)
+- folio_referenced()    - Check if any PTE has Accessed bit set
+```
+
+---
