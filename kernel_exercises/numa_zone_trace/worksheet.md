@@ -6019,6 +6019,73 @@ FORMULA DERIVATION FROM KERNEL DEFINITION:
 
 ---
 
+### Q43: FORMULA DERIVATION vaddr = start + (page_index - vm_pgoff) × PAGE_SIZE
+
+```
+USER CONFUSION: "why is this linear? how can we be sure?"
+USER CONFUSION: "vm_pgoff irritating me, page is from RAM, PFN is from RAM, but this is file"
+USER CONFUSION: "what is this 40 and page index 45 -- index into where"
+
+ANSWER: vm_pgoff and page_index are FILE positions, not RAM positions.
+```
+
+```
+STEP-BY-STEP DERIVATION:
+
+GIVEN DATA:
+  start = 0x795df3828000 (vm_start from /proc/maps)
+  vm_pgoff = 40 (offset 0x28000 / 4096, file chunk at start)
+  page_index = 45 (file chunk we want to find vaddr for)
+
+STEP 1: start corresponds to which file chunk?
+  /proc/maps shows offset = 0x28000 = 163840 bytes
+  163840 / 4096 = 40
+  ∴ start corresponds to file chunk 40
+
+STEP 2: How many chunks after chunk 40 is chunk 45?
+  chunks_after = page_index - vm_pgoff
+  chunks_after = 45 - 40 = 5
+
+STEP 3: How many bytes is 5 chunks?
+  bytes_after = 5 × 4096 = 20480
+
+STEP 4: What vaddr is 20480 bytes after start?
+  vaddr = start + bytes_after
+  vaddr = 0x795df3828000 + 20480
+  vaddr = 0x795df3828000 + 0x5000
+  vaddr = 0x795df382D000
+```
+
+```
+COMBINING INTO FORMULA:
+  vaddr = start + (page_index - vm_pgoff) × PAGE_SIZE
+        = 0x795df3828000 + (45 - 40) × 4096
+        = 0x795df3828000 + 5 × 4096
+        = 0x795df3828000 + 20480
+        = 0x795df382D000
+
+EACH TERM:
+  start = anchor vaddr (where VMA begins)
+  page_index - vm_pgoff = chunks from anchor (distance in file)
+  × PAGE_SIZE = convert chunks to bytes
+  sum = target vaddr
+```
+
+```
+WHY LINEAR (USER ASKED):
+  VMA covers [vm_start, vm_end) = CONTIGUOUS range (kernel mm_types.h line 654)
+  File bytes are laid out in vaddr in SAME ORDER, at SAME SPACING
+  No gaps. No reordering.
+  Single VMA = linear mapping = formula is correct
+
+KERNEL SOURCE PROOF:
+  mm_types.h line 654: /* VMA covers [vm_start; vm_end) addresses within mm */
+  mm_types.h line 721: unsigned long vm_pgoff; /* Offset (within vm_file) in PAGE_SIZE units */
+```
+
+---
+
+
 
 
 
