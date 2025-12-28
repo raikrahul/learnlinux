@@ -4853,3 +4853,182 @@ WHY VMA IS NEEDED (summary from axioms):
 ```
 
 ---
+
+### Q31: HOW VADDR MAPS TO EXACT BYTE IN LIBC.SO.6
+
+```
+REAL DATA FROM YOUR MACHINE (nm -D libc.so.6):
+01. printf offset in libc.so.6 = 0x60100 = 393472 bytes from file start
+02. scanf offset in libc.so.6 = 0x662a0 = 418464 bytes from file start
+03. libc.so.6 size = 2125328 bytes
+04. printf at byte 393472 < 2125328 ✓ (inside file)
+05. scanf at byte 418464 < 2125328 ✓ (inside file)
+```
+
+```
+YOUR QUESTION: 4 processes call printf, each has different vaddr, how do all reach byte 393472?
+
+AXIOM REVIEWED:
+A01. VMA has vm_start, vm_end, vm_pgoff, vm_file
+A02. vm_pgoff = offset / 4096 = page number where VMA starts reading file
+A03. vaddr within VMA maps to file byte = (vm_pgoff × 4096) + (vaddr - vm_start)
+```
+
+```
+PROCESS A:
+06. /proc/A/maps line: "7000 00000-7001 00000 r-xp 00028000 inode libc.so.6"
+07. vm_start = 0x70000000
+08. vm_end = 0x70100000
+09. vm_pgoff = 0x28000 / 4096 = 40 (starts at page 40 of file)
+10. Process A calls printf → CPU executes vaddr ???
+
+CALCULATION: What vaddr in Process A executes printf?
+11. printf is at file byte 0x60100 = 393472
+12. VMA starts reading file at byte = vm_pgoff × 4096 = 40 × 4096 = 163840 = 0x28000
+13. printf offset within VMA region = 393472 - 163840 = 229632 = 0x38100
+14. vaddr of printf in Process A = vm_start + 229632 = 0x70000000 + 0x38100 = 0x70038100
+15. VERIFY: Is 0x70038100 in [vm_start, vm_end)? 
+    0x70000000 <= 0x70038100 < 0x70100000 ✓
+```
+
+```
+PROCESS B (different vm_start):
+16. /proc/B/maps line: "8000 00000-8001 00000 r-xp 00028000 inode libc.so.6"
+17. vm_start = 0x80000000
+18. vm_pgoff = 40 (same, both map r-xp section)
+19. vaddr of printf in Process B = vm_start + 229632 = 0x80000000 + 0x38100 = 0x80038100
+```
+
+```
+DRAW: HOW 2 VADDRS MAP TO SAME FILE BYTE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  libc.so.6 file (2125328 bytes):                                            │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ byte 0                                             byte 2125327        │ │
+│  │  ↓                                                      ↓              │ │
+│  │  [ELF HDR][.text section starts at 0x28000][printf @ 0x60100][scanf @  │ │
+│  │   0x662a0]...                                                           │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  WHY DIAGRAM: shows printf and scanf are FIXED positions in file            │
+│                                                                              │
+│  PROCESS A vaddr space:          PROCESS B vaddr space:                     │
+│  ┌────────────────────┐          ┌────────────────────┐                     │
+│  │ vm_start=0x70000000│          │ vm_start=0x80000000│                     │
+│  │        ↓           │          │        ↓           │                     │
+│  │ 0x70000000 = file  │          │ 0x80000000 = file  │                     │
+│  │   byte 0x28000     │          │   byte 0x28000     │                     │
+│  │        ↓           │          │        ↓           │                     │
+│  │ 0x70038100 = file  │─────────→│ 0x80038100 = file  │─────→ printf @      │
+│  │   byte 0x60100     │          │   byte 0x60100     │        0x60100      │
+│  │   (printf)         │          │   (printf)         │                     │
+│  │        ↓           │          │        ↓           │                     │
+│  │ 0x7003E2A0 = file  │─────────→│ 0x8003E2A0 = file  │─────→ scanf @       │
+│  │   byte 0x662a0     │          │   byte 0x662a0     │        0x662a0      │
+│  │   (scanf)          │          │   (scanf)          │                     │
+│  │        ↓           │          │        ↓           │                     │
+│  │ vm_end=0x70100000  │          │ vm_end=0x80100000  │                     │
+│  └────────────────────┘          └────────────────────┘                     │
+│                                                                              │
+│  WHY DIAGRAM: shows different vaddrs (0x70038100 vs 0x80038100) both map    │
+│               to same file byte 0x60100 (printf code)                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+NUMERICAL VERIFICATION scanf:
+20. scanf is at file byte 0x662a0 = 418464
+21. VMA starts at file byte 163840 (vm_pgoff=40)
+22. scanf offset within VMA = 418464 - 163840 = 254624 = 0x3E2A0
+23. Process A vaddr of scanf = 0x70000000 + 0x3E2A0 = 0x7003E2A0
+24. Process B vaddr of scanf = 0x80000000 + 0x3E2A0 = 0x8003E2A0
+25. Both different vaddrs, both reach file byte 418464 (scanf)
+```
+
+```
+FORMULA DERIVED:
+26. file_byte = (vm_pgoff × 4096) + (vaddr - vm_start)
+27. vaddr = vm_start + (file_byte - vm_pgoff × 4096)
+
+VERIFICATION printf:
+28. file_byte = 393472 (printf offset in libc)
+29. vm_pgoff × 4096 = 40 × 4096 = 163840
+30. vaddr = 0x70000000 + (393472 - 163840) = 0x70000000 + 229632 = 0x70038100 ✓
+```
+
+```
+HOW MANY VMAs NEEDED FOR libc.so.6?
+31. libc.so.6 has 5 sections with different permissions:
+    - r--p at offset 0x0 (read-only, ELF header + rodata)
+    - r-xp at offset 0x28000 (execute, .text section with printf/scanf)
+    - r--p at offset 0x1b0000 (read-only data)
+    - r--p at offset 0x1fe000 (GOT, read-only)
+    - rw-p at offset 0x202000 (read-write, .data/.bss)
+
+32. ∴ 5 VMAs per process for libc.so.6
+33. 105 processes × 5 VMAs = 525 VMAs total in address_space->i_mmap
+```
+
+```
+WHO TRANSLATES VMA TO EXACT OFFSET?
+34. CPU executes instruction at vaddr 0x70038100
+35. MMU walks page table → finds PTE → gets PFN (physical page)
+36. Physical page contains libc bytes starting at (vm_pgoff × 4096 + page_offset_within_vma)
+37. vm_pgoff = 40 → page 40 of libc.so.6
+38. page_offset_within_vma = (0x70038100 - 0x70000000) / 4096 = 229632 / 4096 = 56 pages
+39. ∴ Physical page contains file page = 40 + 56 = page 96 of libc.so.6
+40. Byte within page = 0x70038100 & 0xFFF = 0x100 = 256
+41. Final file byte = 96 × 4096 + 256 = 393472 = 0x60100 = printf ✓
+```
+
+```
+TRANSLATION CHAIN:
+vaddr 0x70038100
+  ↓ (extract page table indices from vaddr, walk CR3 → PML4 → PDPT → PD → PT)
+PTE at some address
+  ↓ (extract PFN from PTE)
+PFN = physical page number
+  ↓ (physical page contains copy of libc page 96)
+physical_addr = PFN × 4096 + (vaddr & 0xFFF)
+  ↓ (CPU fetches instruction bytes from RAM)
+instruction bytes = libc.so.6 file bytes 393472-393475 (printf code)
+```
+
+---
+
+### VERIFIED DATA FROM YOUR MACHINE (2025-12-28)
+
+```
+FROM /proc/self/maps | grep "r-xp.*libc":
+7ceac3428000-7ceac35b0000 r-xp 00028000 103:05 5160837 libc.so.6
+
+FROM nm -D libc.so.6:
+printf @ 0x60100 = 393472 bytes
+scanf  @ 0x662a0 = 418464 bytes
+
+CALCULATED:
+vm_start = 0x7ceac3428000
+vm_end   = 0x7ceac35b0000
+offset   = 0x28000 = 163840 bytes
+vm_pgoff = 163840 / 4096 = 40 pages
+
+printf vaddr = vm_start + (printf_offset - vm_pgoff × 4096)
+             = 0x7ceac3428000 + (393472 - 163840)
+             = 0x7ceac3428000 + 229632
+             = 0x7ceac3428000 + 0x38100
+             = 0x7ceac3460100 ✓
+
+scanf vaddr  = vm_start + (scanf_offset - vm_pgoff × 4096)
+             = 0x7ceac3428000 + (418464 - 163840)
+             = 0x7ceac3428000 + 254624
+             = 0x7ceac3428000 + 0x3E2A0
+             = 0x7ceac34662a0 ✓
+
+RANGE CHECK:
+printf: 0x7ceac3428000 <= 0x7ceac3460100 < 0x7ceac35b0000 ✓
+scanf:  0x7ceac3428000 <= 0x7ceac34662a0 < 0x7ceac35b0000 ✓
+```
+
+---
