@@ -2253,3 +2253,207 @@ RELATIONSHIP: 1 VMA → 0 to N PTEs (N = number of pages in VMA)
 ```
 
 ---
+
+### Q20: HOW DOES VMA KNOW WHICH PFN? WHEN ARE PAGE TABLES SET UP?
+
+310. YOUR QUESTIONS:
+```
+1. "how does the VMA know which PFN does this map to"
+2. "when the kernel booted it already set up the tables as well"
+```
+
+---
+
+### ANSWER 1: VMA DOES NOT STORE PFN
+
+311. CRITICAL INSIGHT:
+```
+VMA does NOT contain PFN.
+VMA only describes: WHERE (vm_start/vm_end), WHAT (file/anon), HOW (permissions).
+PFN is stored in the PAGE TABLE ENTRY (PTE), not in VMA.
+```
+
+312. DRAW (separation of concerns):
+```
+VMA (struct vm_area_struct):
++------------------------+
+| vm_start = 0x1000      | ← WHERE: virtual address range
+| vm_end   = 0x5000      |
+| vm_flags = VM_READ|WRITE| ← HOW: permissions
+| vm_file  = /lib/libc.so | ← WHAT: backing store
+| vm_pgoff = 0           | ← WHAT: offset in file
++------------------------+
+NO PFN HERE!
+
+PAGE TABLE ENTRY (PTE):
++------------------------+
+| PFN = 0x12345          | ← Physical page number
+| Present = 1            |
+| R/W = 1                |
+| User = 1               |
++------------------------+
+PFN IS HERE!
+```
+
+---
+
+### ANSWER 2: PAGE TABLES ARE CREATED ON DEMAND (PAGE FAULT)
+
+313. YOUR CONFUSION: "kernel booted and already set up the tables"
+
+314. REALITY:
+```
+At boot:
+- KERNEL page tables: SET UP (direct map, vmemmap, etc.)
+- USER page tables: NOT SET UP (empty or nearly empty)
+
+When user process starts (exec):
+- VMA created (from ELF file)
+- Page tables: EMPTY (no PTEs for user code/data)
+- PFN: NOT ASSIGNED YET
+
+When user process accesses memory:
+- Page fault occurs
+- Kernel finds VMA for faulting address
+- Kernel allocates physical page (PFN)
+- Kernel creates PTE: vaddr → PFN
+- Process resumes
+```
+
+---
+
+### TRACE: WHAT HAPPENS WHEN YOU RUN /usr/bin/cat
+
+315. STEP-BY-STEP:
+```
+1. EXEC syscall for /usr/bin/cat
+
+2. Kernel parses ELF file, creates VMAs:
+   VMA1: 0x567468b49000-0x567468b4b000 (code segment)
+   VMA2: 0x567468b4b000-0x567468b50000 (text segment)
+   ... etc
+   
+3. Page tables: EMPTY. No PTEs for cat code.
+
+4. Kernel returns to user space, CPU jumps to entry point.
+
+5. CPU tries to fetch instruction at 0x567468b4b000
+   → TLB miss
+   → MMU walks page table
+   → PTE is NOT PRESENT (empty)
+   → PAGE FAULT!
+
+6. Page fault handler (kernel):
+   - Find VMA containing 0x567468b4b000 ✓
+   - VMA says: backed by file /usr/bin/cat, offset 0x2000
+   - Kernel reads page from disk into RAM → gets PFN 0x12345
+   - Kernel creates PTE: vaddr 0x567468b4b000 → PFN 0x12345
+   - Kernel returns from fault
+
+7. CPU retries instruction at 0x567468b4b000
+   → TLB miss
+   → MMU walks page table
+   → PTE is PRESENT, PFN = 0x12345
+   → MMU caches in TLB
+   → Instruction executes
+```
+
+---
+
+### KERNEL SOURCE: handle_mm_fault()
+
+316. FILE: `/usr/src/linux-source-6.8.0/mm/memory.c` line 5519-5551
+
+317. SOURCE:
+```c
+vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
+                           unsigned int flags, struct pt_regs *regs)
+{
+    struct mm_struct *mm = vma->vm_mm;
+    // ...
+    if (unlikely(is_vm_hugetlb_page(vma)))
+        ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
+    else
+        ret = __handle_mm_fault(vma, address, flags);  // Creates PTE here!
+    // ...
+}
+```
+
+318. CALL CHAIN:
+```
+Page fault → do_page_fault() → handle_mm_fault() → __handle_mm_fault()
+→ do_anonymous_page() (for anon) or __do_fault() (for file)
+→ alloc_page() → gets PFN
+→ set_pte() → writes PTE with PFN
+```
+
+---
+
+### HOW VMA FINDS PFN (FOR FILE-BACKED)
+
+319. DRAW:
+```
+User access 0x567468b4b000 → Page fault
+
+Kernel:
+1. Find VMA: vm_start=0x567468b4b000, vm_file=/usr/bin/cat, vm_pgoff=2
+
+2. Calculate file offset:
+   page_in_vma = (0x567468b4b000 - vm_start) / 4096 = 0
+   file_page = vm_pgoff + page_in_vma = 2 + 0 = 2
+   file_offset = file_page * 4096 = 8192
+
+3. Read page at offset 8192 from /usr/bin/cat
+
+4. Put data in physical page PFN 0x12345
+
+5. Create PTE: vaddr → PFN 0x12345
+```
+
+320. FORMULA:
+```c
+file_offset = (vm_pgoff + (address - vm_start) / PAGE_SIZE) * PAGE_SIZE
+```
+
+---
+
+### WHY THIS DESIGN? (LAZY ALLOCATION)
+
+321. PROBLEM: /usr/bin/cat is 35 KB = 9 pages. Loading all upfront = slow.
+
+322. SOLUTION: LAZY. Only load page when accessed.
+
+323. BENEFIT:
+```
+If you run: cat /dev/null
+- VMA created for entire cat binary (9 pages)
+- You only access maybe 2-3 pages (entry point, exit)
+- Only 2-3 pages loaded from disk
+- 6-7 pages never touched, never loaded, no RAM used
+
+If you run: cat huge_file.txt
+- More code paths executed
+- More pages faulted in
+- Maybe 5-6 pages loaded
+
+DEMAND PAGING = only load what you actually use
+```
+
+---
+
+### SUMMARY
+
+324. ANSWERS:
+```
+Q1: How does VMA know PFN?
+A1: VMA does NOT store PFN. VMA stores file + offset.
+    PFN is determined at page fault time.
+    PFN is stored in PTE, not VMA.
+
+Q2: Didn't kernel set up tables at boot?
+A2: Kernel sets up KERNEL page tables at boot.
+    USER page tables are created ON DEMAND (page fault).
+    Each page fault creates 1 PTE.
+```
+
+---
