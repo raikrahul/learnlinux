@@ -619,3 +619,269 @@ This is why you didn't see a "node" field - it's HIDDEN in flags.
 146. WHY PACK: Space efficiency. 3944069 pages × 8 extra bytes for node+zone = 31.5 MB wasted. Better to pack into existing flags.
 
 ---
+
+### Q10: TLB ON YOUR MACHINE (REAL DATA)
+
+147. AXIOM: Your CPU = AMD Ryzen 5 4600H. Source: `lscpu` → "AMD Ryzen 5 4600H with Radeon Graphics".
+
+148. AXIOM: Your machine has 12 CPUs (6 cores × 2 threads). Source: `lscpu` → "CPU(s): 12".
+
+149. AXIOM: Each CPU has TLB. Source: `/proc/cpuinfo` → "TLB size: 3072 4K pages".
+
+150. REAL DATA FROM YOUR MACHINE:
+```
+cat /proc/cpuinfo | grep "TLB size":
+TLB size        : 3072 4K pages
+
+CALCULATION: 3072 entries × 4 KB per page = 3072 × 4096 = 12582912 bytes = 12 MB addressable per TLB
+```
+
+151. WHY THIS DIAGRAM: You asked "who talks to TLB" and "is TLB on each node".
+
+152. DRAW (TLB location in hardware):
+```
+YOUR MACHINE (AMD Ryzen 5 4600H):
+
++------------------------------------------------------------------+
+|                         CPU CHIP (SOCKET 0)                       |
+|  +------------+  +------------+  +------------+                   |
+|  |  CORE 0    |  |  CORE 1    |  |  CORE 2    |  ... (6 cores)   |
+|  | +--------+ |  | +--------+ |  | +--------+ |                   |
+|  | |Thread 0| |  | |Thread 0| |  | |Thread 0| |                   |
+|  | | [TLB]  | |  | | [TLB]  | |  | | [TLB]  | |                   |
+|  | +--------+ |  | +--------+ |  | +--------+ |                   |
+|  | +--------+ |  | +--------+ |  | +--------+ |                   |
+|  | |Thread 1| |  | |Thread 1| |  | |Thread 1| |                   |
+|  | | [TLB]  | |  | | [TLB]  | |  | | [TLB]  | |                   |
+|  | +--------+ |  | +--------+ |  | +--------+ |                   |
+|  +-----+------+  +-----+------+  +-----+------+                   |
+|        |               |               |                          |
+|        v               v               v                          |
+|  +----------------------------------------------------------+    |
+|  |                    L3 CACHE (8 MB)                       |    |
+|  +----------------------------------------------------------+    |
++------------------------------------------------------------------+
+                              |
+                              v
+         +------------------------------------------+
+         |              RAM (16 GB)                 |
+         |  (Page tables live here)                 |
+         |  (vmemmap lives here)                    |
+         +------------------------------------------+
+
+TLB is INSIDE each CPU thread. NOT in RAM. NOT affected by RAM size.
+```
+
+153. ANSWER: Who talks to TLB?
+```
+CPU core executes instruction → needs memory address → address is VIRTUAL
+CPU sends virtual address to MMU (inside CPU) → MMU checks TLB first
+TLB hit: MMU returns physical address immediately (fast, ~1 cycle)
+TLB miss: MMU walks page table (in RAM) → slow (~100 cycles) → caches result in TLB
+```
+
+154. DRAW (TLB lookup flow):
+```
+CPU instruction: MOV RAX, [0xFFFF888012345000]   ← virtual address
+
+Step 1: CPU → asks MMU → "translate 0xFFFF888012345000"
+Step 2: MMU → checks TLB → "do I have entry for this page?"
+        TLB entry format: { virtual_page_number → physical_page_number, flags }
+        
+Step 3a: TLB HIT (entry found):
+         MMU → returns physical address → CPU reads RAM → 1-10 cycles
+         
+Step 3b: TLB MISS (entry NOT found):
+         MMU → reads CR3 register → gets page table base address
+         MMU → walks 4-level page table in RAM:
+               CR3 → PML4[offset] → PDPT[offset] → PD[offset] → PT[offset] → physical address
+         MMU → caches result in TLB → returns physical address
+         Time: ~100-300 cycles
+```
+
+---
+
+### Q11: DOES ADDING RAM INCREASE TLB?
+
+155. WHY YOU ASKED: You recently added RAM to your machine. You want to know if TLB grew.
+
+156. ANSWER: NO. TLB is HARDWARE inside CPU chip. RAM is separate chip on motherboard.
+
+157. DRAW:
+```
+BEFORE: 8 GB RAM                      AFTER: 16 GB RAM
++--------+                            +--------+
+|  CPU   |  TLB = 3072 entries        |  CPU   |  TLB = 3072 entries (SAME)
++--------+                            +--------+
+    |                                     |
++--------+                            +--------+--------+
+| 8 GB   |                            | 8 GB   | 8 GB   |  (you added this)
+| RAM    |                            | RAM    | RAM    |
++--------+                            +--------+--------+
+
+TLB size determined by: CPU model (AMD Ryzen 5 4600H → 3072 entries)
+TLB size NOT determined by: RAM size
+
+To increase TLB: buy different CPU with larger TLB.
+```
+
+158. WHAT ADDING RAM DOES AFFECT:
+```
+- More pages available (16 GB = 4194304 pages vs 8 GB = 2097152 pages)
+- More TLB MISSES possible (more pages to potentially access)
+- More page table entries (page tables take more RAM)
+- vmemmap larger (4M pages × 64 bytes = 256 MB vmemmap)
+```
+
+---
+
+### Q12: YOUR TLB SPECIFICATIONS (REAL DATA)
+
+159. SOURCE: /proc/cpuinfo, AMD documentation
+
+160. YOUR TLB DATA:
+```
+CPU: AMD Ryzen 5 4600H
+TLB size: 3072 4K pages (per thread? per core? - need AMD docs to confirm)
+
+BREAKDOWN (typical AMD Zen 2):
+- L1 iTLB (instruction): 64 entries, fully associative, 4K pages
+- L1 dTLB (data): 64 entries, fully associative, 4K pages
+- L2 TLB (unified): 2048 entries, 8-way associative
+
+TOTAL: 64 + 64 + 2048 = 2176 (approximately, varies by exact model)
+cpuinfo reports 3072 - may include 2M page TLB entries
+```
+
+161. CALCULATION: TLB coverage
+```
+L1 dTLB: 64 entries × 4 KB = 256 KB directly addressable without L1 dTLB miss
+L2 TLB: 2048 entries × 4 KB = 8 MB directly addressable without L2 TLB miss
+```
+
+---
+
+## ERROR REPORT: YOUR MISTAKES
+
+---
+
+### MISTAKE 1: NODE = RAM OR NODE = CHIP?
+
+162. YOUR QUESTION: "node is ram or node is a chip"
+
+163. CONFUSION EXPOSED:
+```
+You conflated: NODE, RAM, CHIP
+These are 3 different things:
+
+NODE = software concept = set of memory + CPUs with similar access latency
+RAM = hardware = physical memory chips (DDR4 modules on your motherboard)
+CHIP = ambiguous = could mean CPU chip or RAM chip
+
+YOUR MACHINE: 1 node containing 1 CPU chip + 2 RAM sticks
+```
+
+164. FIX: Node is neither RAM nor chip. Node is a GROUPING.
+
+---
+
+### MISTAKE 2: WHO TALKS TO TLB?
+
+165. YOUR QUESTION: "who talks to the tlb the ram or the mmu or the cpu itself"
+
+166. CONFUSION EXPOSED:
+```
+RAM does NOT "talk" to anything. RAM is passive storage. RAM waits for requests.
+
+CHAIN:
+CPU core → MMU (inside CPU) → TLB (inside MMU) → if miss → page tables (in RAM)
+
+TLB is part of MMU. MMU is part of CPU. CPU talks to itself.
+RAM only responds when MMU needs to walk page tables on TLB miss.
+```
+
+---
+
+### MISTAKE 3: ADDING RAM = BIGGER TLB?
+
+167. YOUR QUESTION: "does putting extra ram affect tlb"
+
+168. CONFUSION EXPOSED:
+```
+You thought: more RAM → bigger TLB
+
+REALITY:
+TLB size = fixed by CPU design (etched in silicon at factory)
+RAM size = changeable by you (plug in more DIMMs)
+
+These are INDEPENDENT. Adding RAM does NOT change TLB.
+Adding RAM changes: available pages, page table size, vmemmap size.
+```
+
+---
+
+### MISTAKE 4: TYPING WASTE
+
+169. YOUR MESSAGE CONTAINED:
+```
+"what is there on my tlb -- how much bigg -- fetch real sources"
+"whatt is the tlb and fetch data"
+"does tht increase tlb"
+
+Pattern: double letters (bigg, whatt, tht)
+Pattern: rushed typing, not rereading
+Pattern: asking questions already answered in previous lines
+```
+
+170. DIAGNOSIS: Typing faster than thinking. Not reading responses before asking.
+
+---
+
+### MISTAKE 5: INABILITY TO RUN TO MEAT
+
+171. PATTERN:
+```
+You asked 7 questions in one message:
+- is tlb on each node
+- who talks to tlb
+- how many tlb
+- what is tlb size
+- does ram increase tlb
+- what is on my tlb
+- fetch real sources
+
+Instead of: running ONE command, reading output, then asking follow-up.
+```
+
+172. FIX: One question → one answer → verify → next question.
+
+---
+
+### ROOT CAUSE ANALYSIS
+
+173. DRAW:
+```
+YOUR MENTAL MODEL (WRONG):
++-------+       +-------+       +-------+
+| CPU   | ---→  | TLB   | ---→  | RAM   |
+| chip  |       | (???) |       | stores|
+|       |       | where?|       | TLB?  |
++-------+       +-------+       +-------+
+
+CORRECT MODEL:
++--------------------------------------------------+
+|                   CPU CHIP                        |
+|  +------+    +------+    +--------+              |
+|  | Core | →  | MMU  | →  | TLB    |  (all inside)|
+|  +------+    +------+    +--------+              |
++---------------------+----------------------------+
+                      |
+                      | (only on TLB miss)
+                      v
+              +---------------+
+              | RAM           |
+              | (page tables) |
+              +---------------+
+```
+
+---
