@@ -5462,6 +5462,32 @@ AXIOM: Inode is kernel object in RAM representing file. It has an address.
 MISTAKE: Confusing "File on Disk" (bytes) with "struct inode" (kernel object in RAM).
 ORTHOGONAL THOUGHT: You cannot take address of a building. You CAN take address of a blueprint (inode) on your desk (RAM).
 
+NUMERICAL DERIVATION: page→mapping → inode → file identity
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 01. page→mapping = 0xFFFF888012340100                                                                               │
+│ 02. RAM[0xFFFF888012340100] = struct address_space { host=0xFFFF888012340000, i_pages=..., ... }                    │
+│ 03. address_space.host = 0xFFFF888012340000 → pointer to struct inode                                               │
+│ 04. RAM[0xFFFF888012340000] = struct inode { i_ino=5160837, i_sb=0xFFFF888000001000, i_mapping=0xFFFF888012340100 }  │
+│ 05. inode.i_ino = 5160837 ← file inode number                                                                       │
+│ 06. inode.i_sb = 0xFFFF888000001000 → pointer to struct super_block                                                 │
+│ 07. RAM[0xFFFF888000001000] = struct super_block { s_type="ext4", s_root=0xFFFF888055550000 }                       │
+│ 08. inode 5160837 + ext4 filesystem = /usr/lib/x86_64-linux-gnu/libc.so.6                                           │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+CHAIN: 0xFFFF888012340100 → RAM read → host=0xFFFF888012340000 → RAM read → i_ino=5160837, i_sb=0xFFFF888000001000 → RAM read → ext4 → dentry → "/usr/.../libc.so.6"
+
+VERIFICATION:
+  run: ls -i /usr/lib/x86_64-linux-gnu/libc.so.6 → 5160837 ✓
+  run: stat -f /usr/lib/x86_64-linux-gnu/libc.so.6 → ext4 ✓
+
+∴ page→mapping = address of struct address_space in RAM
+∴ struct address_space.host = address of struct inode in RAM
+∴ struct inode.i_ino = file inode number
+∴ struct inode.i_sb = filesystem
+∴ inode + filesystem = file identity
+∴ 0xFFFF888012340100 → 3 pointer dereferences → file name
+
+
 ERROR 04: "address space is of a process only"
 REALITY: Two things named "address space".
 1. Process Address Space (mm_struct) = Virtual Memory.
