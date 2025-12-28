@@ -3780,3 +3780,278 @@ COMPLETE CHAIN: PFN → struct page → anon_vma → anon_vma_chain → VMA → 
 ```
 
 ---
+
+### Q25: KERNEL SOURCE EVIDENCE - FORK AND ANON_VMA
+
+```
+SOURCES QUERIED:
+/usr/src/linux-source-6.8.0/kernel/fork.c (3566 lines)
+/usr/src/linux-source-6.8.0/mm/rmap.c (2736 lines)
+/usr/src/linux-source-6.8.0/mm/memory.c (6385 lines)
+```
+
+---
+
+```
+KERNEL SOURCE 1: dup_mmap() - FORK DUPLICATES VMAs
+FILE: /usr/src/linux-source-6.8.0/kernel/fork.c line 636-795
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ static __latent_entropy int dup_mmap(struct mm_struct *mm,                  │
+│                                       struct mm_struct *oldmm)              │
+│ {                                                                            │
+│     struct vm_area_struct *mpnt, *tmp;                                      │
+│     ...                                                                      │
+│     for_each_vma(vmi, mpnt) {                 // line 668 - iterate VMAs    │
+│         ...                                                                  │
+│         tmp = vm_area_dup(mpnt);               // line 697 - duplicate VMA  │
+│         ...                                                                  │
+│         } else if (anon_vma_fork(tmp, mpnt))   // line 714 - setup anon_vma │
+│             goto fail_nomem_anon_vma_fork;                                  │
+│         ...                                                                  │
+│         retval = copy_page_range(tmp, mpnt);   // line 751 - copy PTEs      │
+│     }                                                                        │
+│ }                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+132. fork() → dup_mmap() at kernel/fork.c:1692
+133. dup_mmap() iterates parent's VMAs via for_each_vma()
+134. for each VMA: vm_area_dup() creates copy at kernel/fork.c:697
+135. for each VMA: anon_vma_fork() links to anon_vma at kernel/fork.c:714
+136. for each VMA: copy_page_range() copies PTEs at kernel/fork.c:751
+```
+
+---
+
+```
+KERNEL SOURCE 2: anon_vma_fork() - SETUP REVERSE MAPPING FOR CHILD
+FILE: /usr/src/linux-source-6.8.0/mm/rmap.c line 336-396
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)  │
+│ {                                                                            │
+│     struct anon_vma_chain *avc;                                             │
+│     struct anon_vma *anon_vma;                                              │
+│                                                                              │
+│     /* Don't bother if the parent process has no anon_vma here. */          │
+│     if (!pvma->anon_vma)                        // line 343                 │
+│         return 0;                                                            │
+│                                                                              │
+│     vma->anon_vma = NULL;                       // line 347                 │
+│                                                                              │
+│     /* First, attach the new VMA to the parent VMA's anon_vmas */           │
+│     error = anon_vma_clone(vma, pvma);          // line 353                 │
+│                                                                              │
+│     /* Then add our own anon_vma. */                                        │
+│     anon_vma = anon_vma_alloc();                // line 362 - new anon_vma  │
+│     avc = anon_vma_chain_alloc(GFP_KERNEL);     // line 366 - new chain     │
+│                                                                              │
+│     anon_vma->root = pvma->anon_vma->root;      // line 374 - share root    │
+│     anon_vma->parent = pvma->anon_vma;          // line 375 - parent link   │
+│     vma->anon_vma = anon_vma;                   // line 383 - child's anon  │
+│     anon_vma_chain_link(vma, avc, anon_vma);    // line 385 - insert tree   │
+│ }                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+137. anon_vma_fork(child_vma, parent_vma) at mm/rmap.c:336
+138. if parent has no anon_vma → return 0 (line 343)
+139. anon_vma_clone() copies parent's chain to child (line 353)
+140. anon_vma_alloc() creates child's own anon_vma (line 362)
+141. anon_vma->root = pvma->anon_vma->root (line 374) - SHARE ROOT
+142. anon_vma->parent = pvma->anon_vma (line 375) - PARENT LINK
+143. anon_vma_chain_link() inserts into interval tree (line 385)
+```
+
+---
+
+```
+KERNEL SOURCE 3: anon_vma_chain_link() - INSERT INTO INTERVAL TREE
+FILE: /usr/src/linux-source-6.8.0/mm/rmap.c line 151-159
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ static void anon_vma_chain_link(struct vm_area_struct *vma,                 │
+│                                  struct anon_vma_chain *avc,                │
+│                                  struct anon_vma *anon_vma)                 │
+│ {                                                                            │
+│     avc->vma = vma;                             // line 155                 │
+│     avc->anon_vma = anon_vma;                   // line 156                 │
+│     list_add(&avc->same_vma, &vma->anon_vma_chain);           // line 157   │
+│     anon_vma_interval_tree_insert(avc, &anon_vma->rb_root);   // line 158   │
+│ }                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+144. avc->vma = child_vma (line 155) - VMA pointer stored
+145. avc->anon_vma = anon_vma (line 156) - back-pointer stored
+146. list_add() adds to VMA's chain (line 157)
+147. anon_vma_interval_tree_insert() adds to anon_vma's rb_root (line 158)
+148. THIS IS HOW RMAP FINDS VMA FROM PAGE!
+```
+
+---
+
+```
+KERNEL SOURCE 4: copy_page_range() - COPY PTEs FROM PARENT TO CHILD
+FILE: /usr/src/linux-source-6.8.0/mm/memory.c line 1287-1356
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ int copy_page_range(struct vm_area_struct *dst_vma,                         │
+│                     struct vm_area_struct *src_vma)                         │
+│ {                                                                            │
+│     pgd_t *src_pgd, *dst_pgd;                                               │
+│     unsigned long addr = src_vma->vm_start;                                 │
+│     unsigned long end = src_vma->vm_end;                                    │
+│     struct mm_struct *dst_mm = dst_vma->vm_mm;                              │
+│     struct mm_struct *src_mm = src_vma->vm_mm;                              │
+│                                                                              │
+│     is_cow = is_cow_mapping(src_vma->vm_flags);  // line 1318 - COW check   │
+│                                                                              │
+│     dst_pgd = pgd_offset(dst_mm, addr);          // line 1336 - child PGD   │
+│     src_pgd = pgd_offset(src_mm, addr);          // line 1337 - parent PGD  │
+│     do {                                                                     │
+│         copy_p4d_range(dst_vma, src_vma, dst_pgd, src_pgd, ...);           │
+│                                                 // line 1342 - copy entries │
+│     } while (dst_pgd++, src_pgd++, addr = next, addr != end);              │
+│ }                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+149. copy_page_range(child_vma, parent_vma) at mm/memory.c:1287
+150. is_cow_mapping() checks if COW needed (line 1318)
+151. dst_pgd = pgd_offset(child_mm, addr) - walk child's page table
+152. src_pgd = pgd_offset(parent_mm, addr) - walk parent's page table
+153. copy_p4d_range() copies entries level by level (line 1342)
+154. PTEs copied: SAME PFN, BOTH READ-ONLY (for COW)
+```
+
+---
+
+```
+KERNEL SOURCE 5: vm_area_dup() - DUPLICATE VMA STRUCTURE
+FILE: /usr/src/linux-source-6.8.0/kernel/fork.c line 484-511
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)             │
+│ {                                                                            │
+│     struct vm_area_struct *new = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);│
+│                                                                              │
+│     data_race(memcpy(new, orig, sizeof(*new)));  // line 497 - copy fields  │
+│     INIT_LIST_HEAD(&new->anon_vma_chain);        // line 502 - empty chain  │
+│ }                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+155. kmem_cache_alloc() allocates new VMA (line 486)
+156. memcpy(new, orig, sizeof(*new)) copies all fields (line 497)
+157. new->vm_start = orig->vm_start (SAME vaddr range!)
+158. new->vm_end = orig->vm_end (SAME vaddr range!)
+159. INIT_LIST_HEAD() empties anon_vma_chain (line 502)
+160. anon_vma_fork() will populate chain later
+```
+
+---
+
+```
+COMPLETE FORK CALL CHAIN
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ sys_fork()                                                                   │
+│   └── kernel_clone()                                                         │
+│         └── copy_mm()                    // kernel/fork.c:1684              │
+│               └── dup_mmap()             // kernel/fork.c:1692              │
+│                     ├── for_each_vma()                                      │
+│                     │     ├── vm_area_dup()       // copy VMA struct        │
+│                     │     ├── anon_vma_fork()     // setup rmap             │
+│                     │     │     ├── anon_vma_clone()                        │
+│                     │     │     ├── anon_vma_alloc()                        │
+│                     │     │     └── anon_vma_chain_link()                   │
+│                     │     │           └── anon_vma_interval_tree_insert()   │
+│                     │     └── copy_page_range()   // copy PTEs              │
+│                     │           └── copy_p4d_range()                        │
+│                     │                 └── copy_pud_range()                  │
+│                     │                       └── copy_pmd_range()            │
+│                     │                             └── copy_pte_range()      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+161. sys_fork()
+162.   → kernel_clone()
+163.     → copy_mm() at kernel/fork.c:1684
+164.       → dup_mmap() at kernel/fork.c:1692
+165.         → for_each_vma() iterates parent VMAs
+166.           → vm_area_dup() copies VMA struct
+167.           → anon_vma_fork() sets up reverse mapping
+168.             → anon_vma_clone() clones parent's chain
+169.             → anon_vma_alloc() creates child's anon_vma
+170.             → anon_vma_chain_link() inserts into interval tree
+171.           → copy_page_range() copies PTEs
+172.             → copy_p4d_range() → copy_pud_range() → copy_pmd_range() → copy_pte_range()
+173. RESULT: child has copy of VMAs, PTEs point to SAME physical pages, _mapcount incremented
+```
+
+---
+
+```
+_MAPCOUNT INCREMENT LOCATION
+FILE: /usr/src/linux-source-6.8.0/include/linux/rmap.h line 404-408
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ /* in copy_pte_range() → folio_try_dup_anon_rmap_pte() */                   │
+│ case RMAP_LEVEL_PTE:                                                         │
+│     do {                                                                     │
+│         if (PageAnonExclusive(page))                                        │
+│             ClearPageAnonExclusive(page);                                   │
+│         atomic_inc(&page->_mapcount);            // INCREMENT HERE          │
+│     } while (page++, --nr_pages > 0);                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+174. copy_pte_range() calls folio_try_dup_anon_rmap_pte()
+175. folio_try_dup_anon_rmap_pte() calls __folio_try_dup_anon_rmap()
+176. __folio_try_dup_anon_rmap() does atomic_inc(&page->_mapcount) at rmap.h:407
+177. _mapcount: 0 → 1 (now 2 PTEs map this page)
+178. This is PROOF that fork increments _mapcount, not creates new physical page
+```
+
+---
+
+```
+NUMERICAL TRACE: FORK OF PROCESS A → PROCESS B
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ BEFORE FORK:                                                                 │
+│   Process A: vaddr 0x7FFF00001000, PTE at 0x4000008, PFN 0x5000             │
+│   page->_mapcount = 0 (1 PTE)                                                │
+│   page->mapping = 0xFFFF888020000001 (anon_vma at 0xFFFF888020000000)       │
+│   anon_vma->rb_root has 1 chain → VMA_A                                     │
+│                                                                              │
+│ fork() CALL:                                                                 │
+│   1. dup_mmap() creates mm_B with new pgd (CR3_B = 0x10000000)              │
+│   2. vm_area_dup() creates VMA_B (copy of VMA_A, same vm_start/vm_end)      │
+│   3. anon_vma_fork() creates anon_vma_chain for VMA_B                       │
+│   4. anon_vma_chain_link() inserts chain into rb_root                       │
+│   5. copy_page_range() creates PTE_B at 0x13000008, value = 0x5000067       │
+│   6. atomic_inc(&page->_mapcount) → _mapcount: 0 → 1                        │
+│                                                                              │
+│ AFTER FORK:                                                                  │
+│   Process A: vaddr 0x7FFF00001000, PTE at 0x4000008, PFN 0x5000             │
+│   Process B: vaddr 0x7FFF00001000, PTE at 0x13000008, PFN 0x5000 (SAME)     │
+│   page->_mapcount = 1 (2 PTEs)                                               │
+│   anon_vma->rb_root has 2 chains → VMA_A, VMA_B                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+179. BEFORE: _mapcount=0, 1 chain in rb_root
+180. fork() executes:
+181.   mm_B created with CR3_B = 0x10000000
+182.   VMA_B copied from VMA_A (vm_start=0x7FFF00000000)
+183.   anon_vma_chain for VMA_B inserted into rb_root
+184.   PTE_B created at 0x13000008, value=0x5000067 (SAME PFN)
+185.   atomic_inc(&page->_mapcount) at rmap.h:407
+186. AFTER: _mapcount=1, 2 chains in rb_root
+187. 2 PTEs → rmap_walk() finds 2 VMAs → 2 PTEs
+```
+
+---
