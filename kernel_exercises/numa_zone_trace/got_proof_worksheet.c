@@ -169,7 +169,7 @@ int main(void) {
      *   r--p offset 0x1fe000 → GOT
      *   rw-p offset 0x202000 → .data, .bss
      */
-    if (0 /* TODO BLOCK 01: replace 0 with: strstr(line, "libc") && strstr(line, "r-xp") */) {
+    if (strstr(line, "libc") && strstr(line, "r-xp")) {
 
       /* TODO BLOCK 02: Parse libc_start and libc_offset from line
        *
@@ -186,7 +186,9 @@ int main(void) {
        *   libc_offset = 0x28000 = 163,840 decimal
        *   vm_pgoff = 163840 / 4096 = 40 pages
        */
-      sscanf(line, "" /* TODO BLOCK 02: replace "" with: "%lx-%*lx %*s %lx" */,
+      sscanf(line, "%lx-%*lx %*s %lx" /* TODO BLOCK 02: replace "" with:
+                                         "%lx-%*lx %*s %lx" */
+             ,
              &libc_start, &libc_offset);
 
       printf("03. libc r-xp VMA: start=0x%lx, offset=0x%lx\n", libc_start,

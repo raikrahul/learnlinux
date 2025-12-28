@@ -5321,3 +5321,99 @@ run: ls -i /usr/lib/x86_64-linux-gnu/libc.so.6 → 5160837 /usr/lib/.../libc.so.
 ```
 
 ---
+
+### ERROR REPORT: USER MISTAKES (2025-12-28 session)
+
+```
+E01. CLAIMED: "Each process has VMA for libc" without proof
+     ACTUAL: /proc/PID/maps grep proves 105 processes have VMA
+     SKIPPED: Checking data before claiming fact
+     FIX: grep ".so.6" in /proc/*/maps, count results = 105
+
+E02. ASKED: "offset is into which file?"
+     CONFUSED: Thought offset might be into got_proof (current executable)
+     ACTUAL: offset is into pathname column file (libc.so.6)
+     SKIPPED: Reading ALL columns of /proc/maps line left-to-right
+     FIX: inode+dev+pathname identify file, offset is into THAT file
+
+E03. CLAIMED: "file is full of inodes"
+     ACTUAL: File = sequence of bytes. Inode = metadata structure on filesystem.
+     CONFUSED: Inode with file content
+     FIX: File has ONE inode. Inode points to file's disk blocks.
+
+E04. ASKED: "how does ld.so know ELF base?"
+     ASSUMED: ld.so searches or guesses address
+     ACTUAL: ld.so CALLS mmap(), kernel RETURNS address
+     SKIPPED: Tracing who calls whom
+     FIX: mmap() return value = address, caller stores it
+
+E05. ASKED: "what is VMA?"
+     ASSUMED: VMA = something new, unrelated to CR3/PFN
+     ACTUAL: VMA = software metadata for vaddr ranges, page table = hardware translation
+     SKIPPED: Connecting VMA to page fault handler decision
+     FIX: #PF → kernel searches VMA → decides: load page or SIGSEGV
+
+E06. CONFUSED: dli_fbase vs r-xp VMA start
+     ASSUMED: Both are same
+     ACTUAL: dli_fbase = ELF load address (byte 0), r-xp VMA start = .text section start
+     DIFFERENCE: 0x28000 bytes = vm_pgoff_bytes
+     FIX: ELF has multiple sections, each becomes separate VMA
+
+E07. ASKED: "why file relates to page?"
+     CONFUSED: Thought file on disk = pages in RAM
+     ACTUAL: Disk bytes → demand paging → RAM pages on page fault
+     SKIPPED: Tracing mmap → page fault → filemap_fault → readpage
+     FIX: File stays on disk. Page = copy in RAM when accessed.
+
+E08. ASKED: "how 4 processes calling printf reach same file byte?"
+     CONFUSED: Different vaddrs = different file bytes
+     ACTUAL: Different vaddrs + different vm_starts → same file offset via formula
+     SKIPPED: Writing formula: file_byte = vm_pgoff*4096 + (vaddr - vm_start)
+     FIX: Formula is linear mapping, works for any vm_start
+
+E09. SKIPPED: Reading /proc/maps format documentation before asking
+     RESULT: Asked what offset means instead of parsing format
+     FIX: man 5 proc → search "maps" → read column definitions
+
+E10. SKIPPED: Running verification commands before claiming understanding
+     RESULT: Asked for proof multiple times
+     FIX: Run command, read output, then claim understanding
+```
+
+```
+PATTERN ANALYSIS:
+P01. Reading partial line → missing context → wrong conclusion
+P02. Assuming without verifying with real data from machine
+P03. Confusing two related concepts (inode vs file, ELF base vs VMA start)
+P04. Not tracing call chain (who calls whom, who returns what)
+P05. Asking "what is X?" before checking if X already defined in previous steps
+```
+
+```
+ORTHOGONAL QUESTIONS USER SHOULD HAVE ASKED:
+Q01. Before E01: "How do I prove process has VMA?" → grep /proc/PID/maps
+Q02. Before E02: "Which column identifies the file?" → inode + dev + pathname
+Q03. Before E04: "Who allocates memory addresses?" → kernel via mmap syscall
+Q04. Before E05: "What does page fault handler need to decide?" → valid vaddr or SIGSEGV
+Q05. Before E06: "Does ELF load as one contiguous block?" → No, multiple VMAs for sections
+```
+
+```
+VERBATIM USER STATEMENTS CONTAINING ERRORS:
+S01. "Each process has VMA describing libc.so.6" → claimed without data
+S02. "offset here what is offset here" → asked without reading all columns
+S03. "file is large file hence how can we be sure" → confused about VMA covering file portions
+S04. "how can it just search in the linked list and find elf base" → assumed search instead of mmap return
+S05. "i cannot understand vma file offset" → did not trace formula step-by-step first
+```
+
+```
+PREVENTION RULES:
+R01. Before claiming: run command, paste output, then claim
+R02. Before asking "what is X?": check if X defined in previous 10 lines
+R03. Before assuming: write down assumption, trace code path, verify/reject
+R04. When confused by column: read ALL columns left-to-right, then ask
+R05. When two things seem same: subtract addresses, non-zero = different
+```
+
+---
