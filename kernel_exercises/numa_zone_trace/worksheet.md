@@ -5974,5 +5974,51 @@ RMAP CHAIN FOR FILE-BACKED PAGE:
 
 ---
 
+### Q42: VMA LINEARITY PROOF FROM KERNEL SOURCE
+
+```
+KERNEL SOURCE (/usr/src/linux-source-6.8.0/include/linux/mm_types.h):
+
+Line 643-648:
+/*
+ * This struct describes a virtual memory area. There is one of these
+ * per VM-area/task. A VM area is any part of the process virtual memory
+ * space that has a special rule for the page-fault handlers (ie a shared
+ * library, the executable area etc).
+ */
+
+Line 654:
+  /* VMA covers [vm_start; vm_end) addresses within mm */
+  unsigned long vm_start;
+  unsigned long vm_end;
+
+Line 721-723:
+  unsigned long vm_pgoff; /* Offset (within vm_file) in PAGE_SIZE units */
+  struct file * vm_file;  /* File we map to (can be NULL). */
+```
+
+```
+PROOF OF LINEARITY:
+01. VMA covers [vm_start, vm_end) ← contiguous range, no gaps
+02. vm_pgoff = file offset in PAGE_SIZE units ← linear offset into file
+03. file byte at (vm_pgoff × 4096 + N) → vaddr at (vm_start + N)
+04. This is LINEAR: offset in file = offset in vaddr
+05. Kernel design guarantees no gaps, no reordering within single VMA
+
+FORMULA DERIVATION FROM KERNEL DEFINITION:
+  vm_start corresponds to file chunk vm_pgoff
+  To find vaddr for file chunk X:
+    chunks_from_start = X - vm_pgoff
+    bytes_from_start = chunks_from_start × PAGE_SIZE
+    vaddr = vm_start + bytes_from_start
+    vaddr = vm_start + (X - vm_pgoff) × PAGE_SIZE
+
+∴ vaddr = vm_start + (page_index - vm_pgoff) × PAGE_SIZE is CORRECT by kernel design
+∴ Linearity guaranteed by [vm_start, vm_end) being contiguous
+```
+
+---
+
+
 
 

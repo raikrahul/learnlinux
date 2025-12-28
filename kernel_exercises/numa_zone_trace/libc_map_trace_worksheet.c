@@ -464,8 +464,7 @@ int main(void) {
         if (vm_pgoff <= 45 && 45 < vm_pgoff + vma_pages) {
           /* TODO BLOCK 13: What is the vaddr formula? */
           unsigned long page_index = 45;
-          unsigned long vaddr =
-              start + (page_index - vm_pgoff) * /* TODO: multiplier */;
+          unsigned long vaddr = start + (page_index - vm_pgoff) * PAGE_SIZE;
           printf("    → page %lu maps to vaddr 0x%lx\n", page_index, vaddr);
           /* VERIFY: Should print 0x795df382D000 or similar */
         }
