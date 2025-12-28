@@ -1700,3 +1700,196 @@ Without understanding WHY it exists, you cannot:
 ```
 
 ---
+
+### Q17: WHY BOTH _REFCOUNT AND _MAPCOUNT?
+
+254. YOUR QUESTION: "why waste refcount - just query size of array of PTEs"
+
+255. YOUR CONFUSION: You think _refcount = _mapcount + 1. This is WRONG.
+
+256. REALITY: _refcount counts ALL references. _mapcount counts ONLY page table mappings.
+
+---
+
+### WHEN _REFCOUNT ≠ _MAPCOUNT + 1
+
+257. DRAW:
+```
+_refcount = number of "users" of the page (ANY reference)
+_mapcount = number of page table entries pointing to page MINUS 1
+
+THEY ARE DIFFERENT THINGS.
+
+Example where they differ:
+_refcount = 5
+_mapcount = 1 (2 PTEs)
+
+Where are the other 3 references? NOT from page tables.
+```
+
+---
+
+### SCENARIO 1: KERNEL HOLDING PAGE (NO PTE)
+
+258. CODE:
+```c
+struct page *page = alloc_page(GFP_KERNEL);  // _refcount = 1, _mapcount = -1
+// Kernel is using page but NOT mapping it in any page table
+// Page is in kernel memory, accessed via direct map
+```
+
+259. VALUES:
+```
+_refcount = 1 (kernel holds reference)
+_mapcount = -1 (no page table entries)
+
+_refcount ≠ _mapcount + 1
+1 ≠ -1 + 1 = 0  ← NOT EQUAL
+```
+
+---
+
+### SCENARIO 2: DMA BUFFER
+
+260. CODE:
+```c
+// Driver allocates page for DMA
+struct page *page = alloc_page(GFP_KERNEL);
+dma_addr_t dma = dma_map_page(dev, page, 0, PAGE_SIZE, DMA_TO_DEVICE);
+// Device is using page, kernel holds reference, no PTE
+```
+
+261. VALUES:
+```
+_refcount = 1 (or 2 if driver also holds reference)
+_mapcount = -1 (device access is NOT via page table)
+
+Device accesses RAM directly via physical address (DMA).
+No MMU. No page table. No _mapcount increment.
+But _refcount > 0 because someone owns the page.
+```
+
+---
+
+### SCENARIO 3: PAGE IN TRANSIT (BEING MIGRATED)
+
+262. STEPS:
+```
+Step 1: Page mapped by 2 processes. _refcount=2, _mapcount=1.
+Step 2: Migration starts. Kernel takes extra reference.
+Step 3: _refcount=3, _mapcount=1 (PTEs not changed yet)
+Step 4: Kernel copies data to new page.
+Step 5: Kernel updates PTEs.
+Step 6: _refcount=1, _mapcount=-1 (old page, about to be freed)
+```
+
+263. DURING STEP 3:
+```
+_refcount = 3 (2 processes + 1 migration code)
+_mapcount = 1 (still 2 PTEs)
+
+3 ≠ 1 + 1 = 2  ← NOT EQUAL
+```
+
+---
+
+### SCENARIO 4: PAGE CACHE (FILE PAGE, NOT MAPPED)
+
+264. SITUATION: You read a file. Page is in page cache. You close file. Page stays in cache.
+
+265. VALUES:
+```
+_refcount = 1 (page cache holds reference)
+_mapcount = -1 (no process has it mapped anymore)
+
+Page is in cache for future reads.
+No PTE points to it.
+But _refcount > 0 because page cache owns it.
+```
+
+---
+
+### SCENARIO 5: GET_USER_PAGES (DIO, RDMA)
+
+266. CODE:
+```c
+// Kernel pins user page for Direct I/O
+get_user_pages(addr, 1, 0, &page, NULL);
+// Page is pinned. User has it mapped (1 PTE). Kernel has extra reference.
+```
+
+267. VALUES:
+```
+_refcount = 2 (user mapping + kernel pin)
+_mapcount = 0 (1 PTE from user)
+
+2 ≠ 0 + 1 = 1  ← NOT EQUAL
+```
+
+268. WHY: RDMA and Direct I/O need to ensure page isn't freed while device is accessing it. They call get_user_pages() which increments _refcount without adding PTE.
+
+---
+
+### SUMMARY TABLE
+
+269. DRAW:
+```
++-------------------------+------------+------------+------------------+
+| SCENARIO                | _refcount  | _mapcount  | _ref = _map + 1? |
++-------------------------+------------+------------+------------------+
+| Normal user page        | 1          | 0          | 1 = 0 + 1 ✓      |
+| Shared by 2 processes   | 2          | 1          | 2 = 1 + 1 ✓      |
+| Kernel alloc (no map)   | 1          | -1         | 1 ≠ 0 ✗          |
+| DMA buffer              | 1          | -1         | 1 ≠ 0 ✗          |
+| Migration in progress   | 3          | 1          | 3 ≠ 2 ✗          |
+| Page cache (unmapped)   | 1          | -1         | 1 ≠ 0 ✗          |
+| get_user_pages (pinned) | 2          | 0          | 2 ≠ 1 ✗          |
++-------------------------+------------+------------+------------------+
+```
+
+270. CONCLUSION:
+```
+_refcount = _mapcount + 1 ONLY when:
+- All references are from page table mappings
+- No kernel code holds extra reference
+- No DMA in progress
+- No migration in progress
+- No page cache retention
+
+This is the MINORITY of cases. Most pages have extra references.
+```
+
+---
+
+### WHY BOTH ARE NEEDED
+
+271. PROBLEM: When can kernel FREE the page?
+
+272. ANSWER:
+```
+CAN FREE when:
+- _refcount = 0 (nobody holds any reference)
+
+CANNOT FREE when:
+- _refcount > 0 (someone still using it)
+
+_mapcount is NOT sufficient:
+- _mapcount = -1 but _refcount = 1 → page cache owns it → DON'T FREE
+- _mapcount = -1 but _refcount = 1 → DMA in progress → DON'T FREE
+```
+
+273. DRAW:
+```
+_refcount: "Can I free this page?"
+  0 → YES, free it
+  >0 → NO, someone using it
+
+_mapcount: "How many PTEs point here?"
+  -1 → 0 PTEs
+  0  → 1 PTE
+  N  → N+1 PTEs
+
+DIFFERENT QUESTIONS. DIFFERENT ANSWERS. BOTH NEEDED.
+```
+
+---
