@@ -5576,3 +5576,70 @@ HOW KERNEL KNOWS WHICH:
 ```
 
 ---
+
+### Q38: FILE PAGE DEFINITION (axiomatic with kernel source)
+
+```
+AXIOM 1: File = sequence of bytes stored on disk
+  libc.so.6 = 2125328 bytes (byte 0 to byte 2125327)
+
+AXIOM 2: Page size = 4096 bytes (x86 architecture constant)
+  Kernel source: include/asm-generic/page.h defines PAGE_SIZE = 4096
+
+DEFINITION: File page N = bytes from N×4096 to N×4096+4095 of the file
+  File page 0 = bytes 0 to 4095 (first 4096 bytes)
+  File page 1 = bytes 4096 to 8191
+  File page 40 = bytes 163840 to 167935 (= bytes 0x28000 to 0x28FFF)
+  File page 96 = bytes 393216 to 397311 (contains printf @ 0x60100)
+
+Total file pages = ceil(2125328 / 4096) = 519
+```
+
+```
+KERNEL SOURCE PROOF (/usr/src/linux-source-6.8.0/mm/memory.c):
+
+Line 4723-4724:
+  /* The page offset of vmf->address within the VMA. */
+  pgoff_t vma_off = vmf->pgoff - vmf->vma->vm_pgoff;
+
+  vmf->pgoff = file PAGE number for faulting address
+  vmf->vma->vm_pgoff = first file PAGE mapped by this VMA
+  vma_off = how many pages into VMA
+
+/usr/src/linux-source-6.8.0/mm/filemap.c:
+
+Line 3255:
+  pgoff_t max_idx, index = vmf->pgoff;
+
+  index = file page number (passed to filemap_get_folio)
+  Kernel reads file page 'index' from disk into RAM
+```
+
+```
+CALCULATION:
+  File byte offset → File page number:
+    file_page = file_byte_offset / 4096 (integer division)
+
+  printf byte offset = 0x60100 = 393472
+  printf file_page = 393472 / 4096 = 96
+
+  /proc/self/maps offset = 0x28000 = 163840 bytes
+  vm_pgoff = 163840 / 4096 = 40 pages
+  This VMA maps file pages starting at page 40
+```
+
+```
+VADDR FORMULA (from kernel calculation):
+  vma_off = vmf->pgoff - vmf->vma->vm_pgoff
+  vaddr = vmf->vma->vm_start + vma_off × 4096
+
+  For printf:
+    vmf->pgoff = 96 (printf file page)
+    vm_pgoff = 40 (VMA starts at file page 40)
+    vma_off = 96 - 40 = 56 pages
+    vaddr = 0x795df3828000 + 56 × 4096 = 0x795df3828000 + 0x38000 = 0x795df3860000
+    (plus byte offset within page: 393472 % 4096 = 256 = 0x100)
+    printf vaddr = 0x795df3860100
+```
+
+---
