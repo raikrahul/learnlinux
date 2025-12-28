@@ -4681,3 +4681,54 @@ S05. Did not trace: file bytes on disk → page fault → RAM page → PTE.
 ```
 
 ---
+
+### Q29: EMPIRICAL PROOF - 105 PROCESSES HAVE VMA FOR LIBC.SO.6
+
+```
+CLAIM: "Each of 105 processes has VMA describing libc.so.6"
+QUESTION: How do we know this without reading each process's source code?
+ANSWER: We read /proc/PID/maps for each process (kernel exposes VMA data)
+```
+
+```
+METHOD (your libc_map_trace code):
+01. opendir("/proc") → iterate all entries
+02. For entry "39427" (a PID): open "/proc/39427/maps"
+03. Read each line, call strstr(line, ".so.6")
+04. If match found → libc_process_count++
+05. After all PIDs: libc_process_count = 105
+```
+
+```
+REAL DATA FROM YOUR MACHINE (2025-12-28):
+06. cat /proc/self/maps | grep libc:
+    739714a00000-739714a28000 r--p 00000000 103:05 5160837 libc.so.6
+    739714a28000-739714bb0000 r-xp 00028000 103:05 5160837 libc.so.6
+    739714bb0000-739714bff000 r--p 001b0000 103:05 5160837 libc.so.6
+    739714bff000-739714c03000 r--p 001fe000 103:05 5160837 libc.so.6
+    739714c03000-739714c05000 rw-p 00202000 103:05 5160837 libc.so.6
+
+07. 5 VMAs in THIS process for libc.so.6
+08. All have inode 5160837 (same file)
+09. Offsets: 0x0, 0x28000, 0x1b0000, 0x1fe000, 0x202000 (different file sections)
+```
+
+```
+DERIVATION:
+10. /proc/PID/maps = kernel-generated view of process's VMAs
+11. Each line = one VMA (kernel generates format: start-end perms offset dev inode path)
+12. grep found libc.so.6 in 105 /proc/PID/maps files
+13. ∴ 105 processes have at least one VMA for libc.so.6
+14. This is OBSERVATION of kernel data structures via /proc interface
+15. No assumption about process source code required
+```
+
+```
+CONNECTION TO KERNEL INTERNALS:
+16. VMA exists in kernel as struct vm_area_struct
+17. /proc/PID/maps is text representation of mm->mmap list (or maple tree)
+18. Kernel function show_map_vma() in fs/proc/task_mmu.c generates each line
+19. Your grep counts VMAs → proves 105 processes share libc.so.6 pages
+```
+
+---
