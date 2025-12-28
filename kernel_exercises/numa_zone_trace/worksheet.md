@@ -5487,3 +5487,92 @@ CPU accesses 0x777bc6c60100 → MMU reads PTE → physical = 0x123456×4096 + 0x
 ```
 
 ---
+
+### Q37: WHAT IS page→index AND FILE PAGE (axiomatic from bytes)
+
+```
+AXIOM 01: Disk = array of bytes, byte 0 to byte N
+          Your disk: /dev/nvme0n1, size = 500GB = 500,000,000,000 bytes
+
+AXIOM 02: File = contiguous sequence of bytes stored on disk
+          libc.so.6 size = 2125328 bytes
+
+AXIOM 03: Page = 4096 consecutive bytes (x86 page size)
+```
+
+```
+DEFINITION: FILE PAGE = 4096-byte chunk of FILE
+  libc.so.6 file page 0 = file bytes 0 to 4095 (ELF header)
+  libc.so.6 file page 1 = file bytes 4096 to 8191
+  libc.so.6 file page 96 = file bytes 96×4096 to 96×4096+4095 = 393216 to 397311
+  Total file pages = ceil(2125328 / 4096) = 519 file pages
+
+DEFINITION: RAM PAGE = 4096-byte chunk of RAM (identified by PFN)
+  RAM page PFN 0x123456 = physical bytes 0x123456000 to 0x123456FFF
+
+FILE PAGE ≠ RAM PAGE
+FILE PAGE = position within file (on disk)
+RAM PAGE = position in physical memory
+```
+
+```
+MAPPING: When kernel loads file page into RAM page:
+  File page 96 of libc.so.6 (bytes 393216-397311 on disk)
+  → copied into →
+  RAM page PFN 0x123456 (physical bytes 0x123456000-0x123456FFF)
+
+PROBLEM: Given RAM page at PFN 0x123456, which file page does it hold?
+SOLUTION: Kernel stores this in page→index = 96
+```
+
+```
+WHY UNION in struct page:
+
+32GB RAM = 8,388,608 pages
+Each struct page = 64 bytes
+Total = 8,388,608 × 64 = 512 MB just for metadata!
+
+WITHOUT UNION (hypothetical):
+struct page {
+    unsigned long flags;           // 8 bytes at offset 0x00
+    void *mapping;                 // 8 bytes at offset 0x08
+    pgoff_t index;                 // 8 bytes at offset 0x10
+    struct anon_vma *anon_vma;     // 8 bytes at offset 0x18 ← EXTRA
+    struct kmem_cache *slab_cache; // 8 bytes at offset 0x20 ← EXTRA
+};
+Total = 40 bytes per struct page
+
+WITH UNION (actual kernel):
+struct page {
+    unsigned long flags;           // 8 bytes at offset 0x00
+    void *mapping;                 // 8 bytes at offset 0x08
+    union {
+        pgoff_t index;             // 8 bytes at offset 0x10 ← SHARES
+        struct anon_vma *anon_vma; // 8 bytes at offset 0x10 ← SAME OFFSET
+        struct kmem_cache *slab_cache; // 8 bytes at offset 0x10 ← SAME OFFSET
+    };
+};
+Total = 24 bytes
+SAVED: 16 bytes per page × 8,388,608 pages = 134 MB
+```
+
+```
+SAME BYTES, DIFFERENT INTERPRETATION:
+
+PFN 0x123456 is file-backed (libc page 96):
+  struct page at 0xFFFF88849115800
+  Offset 0x10: bytes = [60 00 00 00 00 00 00 00]
+  Interpreted as pgoff_t index = 0x60 = 96 ✓
+
+PFN 0x789ABC is anonymous (malloc page):
+  struct page at 0xFFFF888F135AF00
+  Offset 0x10: bytes = [00 40 34 12 88 88 FF FF]
+  Interpreted as struct anon_vma* = 0xFFFF888012344000 ✓
+
+HOW KERNEL KNOWS WHICH:
+  if (PageAnon(page))         → use page->anon_vma
+  else if (PageSlab(page))    → use page->slab_cache  
+  else if (page->mapping)     → use page->index (file-backed)
+```
+
+---
