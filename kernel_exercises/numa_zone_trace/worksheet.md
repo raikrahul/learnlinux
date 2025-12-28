@@ -3297,3 +3297,486 @@ COMPLEXITY ANALYSIS
 ```
 
 ---
+
+### Q24: AXIOMATIC DERIVATION FROM SCRATCH
+
+```
+AXIOM 1: RAM is array of bytes
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ RAM = byte[0], byte[1], byte[2], ..., byte[N-1]                             │
+│ Your machine: N = 16GB = 16 × 1024³ = 17179869184 bytes                     │
+│ Address range: 0x0 to 0x3FFFFFFFF (36 bits physical for 64GB addressable)   │
+│                                                                              │
+│ OPERATION: RAM[addr] = read 1 byte at address addr                          │
+│ OPERATION: RAM[addr:addr+8] = read 8 bytes starting at addr                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+01. RAM = array of bytes, indexed by physical address
+02. physical_address = 0x0 to 0x3FFFFFFFF (your machine has 16GB)
+03. read_byte(0x1000) = RAM[0x1000]
+04. read_8bytes(0x1000) = RAM[0x1000] | RAM[0x1001]<<8 | ... | RAM[0x1007]<<56
+```
+
+---
+
+```
+AXIOM 2: CPU has registers (fixed storage slots)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Register = named 64-bit storage inside CPU                                  │
+│ CR3 = Control Register 3, holds physical address of page table              │
+│                                                                              │
+│ Your machine right now:                                                      │
+│   CR3 = 0x0000000001000000 (for current process)                            │
+│   This means: page table starts at physical address 0x1000000               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+05. CR3 = 64-bit register inside CPU
+06. CR3 value = 0x1000000 (example)
+07. CR3 holds physical address, not virtual
+08. CR3 changes on context switch (each process has different CR3)
+```
+
+---
+
+```
+AXIOM 3: Virtual address is what program uses, physical address is where RAM is
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Program says: "read memory at 0x7FFF00001000"                               │
+│ This is VIRTUAL address (vaddr)                                              │
+│                                                                              │
+│ RAM only understands PHYSICAL addresses                                      │
+│ MMU (Memory Management Unit) translates: vaddr → physical_addr              │
+│                                                                              │
+│ QUESTION: How does MMU know the translation?                                │
+│ ANSWER: MMU reads translation from PAGE TABLE in RAM                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+09. vaddr = 0x7FFF00001000 (what program uses)
+10. physical_addr = ??? (where data actually is in RAM)
+11. translation_needed = vaddr → physical_addr
+12. translator = MMU hardware in CPU
+13. translation_data_location = RAM[CR3...]
+```
+
+---
+
+```
+AXIOM 4: Page = 4096 bytes (fixed size chunk)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PAGE_SIZE = 4096 bytes = 0x1000 bytes = 2^12 bytes                          │
+│                                                                              │
+│ WHY 4096?                                                                    │
+│   - 4096 = 2^12                                                              │
+│   - 12 bits needed to address any byte within a page                        │
+│   - Remaining bits (64-12=52) address which page                            │
+│                                                                              │
+│ Page Frame Number (PFN) = physical_address / 4096                           │
+│   physical_address = 0x5000000                                               │
+│   PFN = 0x5000000 / 0x1000 = 0x5000                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+14. PAGE_SIZE = 4096 = 0x1000
+15. PAGE_SHIFT = 12 (log₂(4096) = 12)
+16. physical_addr = 0x5000000
+17. PFN = 0x5000000 >> 12 = 0x5000
+18. physical_addr = PFN << 12 = 0x5000 << 12 = 0x5000000 ✓
+```
+
+---
+
+```
+AXIOM 5: Virtual address split into 5 parts (x86_64)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ vaddr = 0x7FFF00001000 (48 bits used, upper 16 bits = sign extension)       │
+│                                                                              │
+│ Binary of 0x7FFF00001000:                                                    │
+│ 0111 1111 1111 1111 0000 0000 0000 0000 0001 0000 0000 0000                 │
+│ │         │         │         │         │                                    │
+│ └─47-39───┴─38-30───┴─29-21───┴─20-12───┴─11-0────                          │
+│   PML4 idx  PDPT idx  PD idx    PT idx   Page offset                        │
+│                                                                              │
+│ Extract each part using bit masks:                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+19. vaddr = 0x7FFF00001000
+20. bits_11_to_0  = vaddr & 0xFFF = 0x000 (page offset)
+21. bits_20_to_12 = (vaddr >> 12) & 0x1FF = (0x7FFF00001) & 0x1FF = 0x001 (PT index)
+22. bits_29_to_21 = (vaddr >> 21) & 0x1FF = (0x3FFF8000) & 0x1FF = 0x000 (PD index)
+23. bits_38_to_30 = (vaddr >> 30) & 0x1FF = (0x1FFFC) & 0x1FF = 0x1FC = 508 (PDPT index)
+24. bits_47_to_39 = (vaddr >> 39) & 0x1FF = (0xFF) & 0x1FF = 0x0FF = 255 (PML4 index)
+```
+
+```
+25. CALCULATION CHECK for bits_20_to_12:
+    vaddr = 0x7FFF00001000
+    vaddr >> 12 = 0x7FFF00001
+    0x7FFF00001 & 0x1FF = 0x001 ✓
+
+26. CALCULATION CHECK for bits_38_to_30:
+    vaddr >> 30 = 0x7FFF00001000 >> 30 = 0x1FFFC
+    0x1FFFC & 0x1FF = 0x1FC = 508 ✓
+
+27. CALCULATION CHECK for bits_47_to_39:
+    vaddr >> 39 = 0x7FFF00001000 >> 39 = 0xFF
+    0xFF & 0x1FF = 0xFF = 255 ✓
+```
+
+---
+
+```
+AXIOM 6: Page table is array of 512 entries, each 8 bytes
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Page table = array of 512 entries                                           │
+│ Each entry = 8 bytes (64 bits)                                               │
+│ Table size = 512 × 8 = 4096 bytes = 1 page                                  │
+│                                                                              │
+│ WHY 512? Because 9 bits index → 2^9 = 512 entries                           │
+│ WHY 8 bytes? Because 64-bit addresses                                       │
+│                                                                              │
+│ Entry address = table_base + index × 8                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+28. entries_per_table = 512
+29. bytes_per_entry = 8
+30. table_size = 512 × 8 = 4096 bytes
+31. entry_addr = table_base + index × 8
+```
+
+---
+
+```
+AXIOM 7: 4-level page table (PML4 → PDPT → PD → PT → Page)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Level 4: PML4 (Page Map Level 4) - pointed to by CR3                        │
+│ Level 3: PDPT (Page Directory Pointer Table)                                │
+│ Level 2: PD (Page Directory)                                                │
+│ Level 1: PT (Page Table)                                                    │
+│ Level 0: Physical page (the actual data)                                    │
+│                                                                              │
+│ Each entry contains: next_table_physical_address + flags                    │
+│ Final entry (PT) contains: PFN + flags                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+```
+DERIVATION: STEP-BY-STEP PAGE TABLE WALK
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ INPUT: CR3 = 0x1000000, vaddr = 0x7FFF00001000                              │
+│ OUTPUT: physical_address = ???                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+STEP 1: Read PML4 entry
+32. PML4_base = CR3 = 0x1000000
+33. PML4_index = 255 (derived in line 27)
+34. PML4_entry_addr = PML4_base + PML4_index × 8
+35.                 = 0x1000000 + 255 × 8
+36.                 = 0x1000000 + 2040
+37.                 = 0x1000000 + 0x7F8
+38.                 = 0x10007F8
+39. PML4_entry = RAM[0x10007F8:0x1000800] = read 8 bytes
+40. PML4_entry = 0x0000000002000003 (from RAM)
+```
+
+```
+STEP 2: Parse PML4 entry
+41. PML4_entry = 0x0000000002000003
+42. Bit 0 (Present) = 0x0000000002000003 & 0x1 = 1 ✓ (page is present)
+43. Bits 12-51 (next table phys addr) = 0x0000000002000003 & 0x000FFFFFFFFFF000
+44.                                   = 0x0000000002000000
+45. PDPT_base = 0x2000000
+```
+
+```
+STEP 3: Read PDPT entry
+46. PDPT_base = 0x2000000
+47. PDPT_index = 508 (derived in line 26)
+48. PDPT_entry_addr = PDPT_base + PDPT_index × 8
+49.                 = 0x2000000 + 508 × 8
+50.                 = 0x2000000 + 4064
+51.                 = 0x2000000 + 0xFE0
+52.                 = 0x2000FE0
+53. PDPT_entry = RAM[0x2000FE0] = 0x0000000003000003
+```
+
+```
+STEP 4: Parse PDPT entry, get PD base
+54. PDPT_entry = 0x0000000003000003
+55. Present bit = 1 ✓
+56. PD_base = 0x0000000003000003 & 0x000FFFFFFFFFF000 = 0x3000000
+```
+
+```
+STEP 5: Read PD entry
+57. PD_base = 0x3000000
+58. PD_index = 0 (derived in line 22)
+59. PD_entry_addr = PD_base + PD_index × 8 = 0x3000000 + 0 = 0x3000000
+60. PD_entry = RAM[0x3000000] = 0x0000000004000003
+```
+
+```
+STEP 6: Parse PD entry, get PT base
+61. PD_entry = 0x0000000004000003
+62. Present bit = 1 ✓
+63. PT_base = 0x4000000
+```
+
+```
+STEP 7: Read PT entry (this is the PTE!)
+64. PT_base = 0x4000000
+65. PT_index = 1 (derived in line 21)
+66. PTE_addr = PT_base + PT_index × 8 = 0x4000000 + 1 × 8 = 0x4000008
+67. PTE = RAM[0x4000008] = 0x0000000005000067
+```
+
+```
+STEP 8: Parse PTE, extract PFN
+68. PTE = 0x0000000005000067
+69. PFN = (PTE & 0x000FFFFFFFFFF000) >> 12
+70.     = (0x0000000005000067 & 0x000FFFFFFFFFF000) >> 12
+71.     = 0x0000000005000000 >> 12
+72.     = 0x5000
+```
+
+```
+STEP 9: Calculate physical address
+73. page_offset = vaddr & 0xFFF = 0x7FFF00001000 & 0xFFF = 0x000
+74. physical_addr = (PFN << 12) | page_offset
+75.               = (0x5000 << 12) | 0x000
+76.               = 0x5000000 | 0x000
+77.               = 0x5000000
+```
+
+```
+RESULT CHECK:
+78. INPUT:  vaddr = 0x7FFF00001000
+79. OUTPUT: physical_addr = 0x5000000
+80. PFN = 0x5000
+81. Page table entries traversed: 0x10007F8 → 0x2000FE0 → 0x3000000 → 0x4000008
+```
+
+---
+
+```
+WHY DOES PTE EXIST AT PHYSICAL ADDRESS 0x4000008?
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Answer: Kernel created it during page fault                                 │
+│                                                                              │
+│ Timeline:                                                                    │
+│ 1. Process calls malloc() or accesses new memory                            │
+│ 2. CPU tries vaddr=0x7FFF00001000, no PTE exists, PAGE FAULT                │
+│ 3. Kernel allocates physical page (gets PFN 0x5000 from buddy allocator)    │
+│ 4. Kernel creates PTE at physical address 0x4000008                         │
+│ 5. Kernel writes value 0x5000067 to RAM[0x4000008]                          │
+│ 6. Kernel returns from fault, CPU retries, translation works                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+82. PTE created by: kernel (not hardware)
+83. PTE creation trigger: page fault
+84. PTE location: determined by page table hierarchy
+85. PTE value: kernel writes (PFN << 12) | permission_flags
+86. PTE value written: 0x5000 << 12 | 0x067 = 0x5000067
+```
+
+---
+
+```
+WHY PROCESS B HAS DIFFERENT PTE ADDRESS FOR SAME PFN?
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Process A: CR3 = 0x1000000 (different PML4)                                 │
+│ Process B: CR3 = 0x10000000 (different PML4)                                │
+│                                                                              │
+│ FORK scenario:                                                               │
+│ 1. Process A has PTE at 0x4000008, value = 0x5000067                        │
+│ 2. fork() creates Process B                                                  │
+│ 3. Kernel copies page tables (new physical locations)                       │
+│ 4. Process B has PTE at 0x13000008, value = 0x5000067 (SAME PFN)           │
+│ 5. Both PTEs point to same physical page (PFN 0x5000)                       │
+│ 6. page->_mapcount incremented: 0 → 1 (now 2 PTEs)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+87. CR3_A = 0x1000000, CR3_B = 0x10000000 (different)
+88. PTE_A_phys = 0x4000008, PTE_B_phys = 0x13000008 (different)
+89. PTE_A_value = 0x5000067, PTE_B_value = 0x5000067 (same)
+90. PFN_A = 0x5000, PFN_B = 0x5000 (same)
+91. page->_mapcount = 1 → means 2 PTEs
+```
+
+---
+
+```
+AXIOM 8: struct page exists for every physical page in system
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ vmemmap = virtual address 0xFFFFEA0000000000                                │
+│ This maps to array: struct page pages[MAX_PFN]                              │
+│ sizeof(struct page) = 64 bytes                                               │
+│                                                                              │
+│ To find struct page for any PFN:                                            │
+│   page_ptr = vmemmap + PFN × sizeof(struct page)                            │
+│            = 0xFFFFEA0000000000 + PFN × 64                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+92. vmemmap = 0xFFFFEA0000000000
+93. sizeof_struct_page = 64 = 0x40
+94. PFN = 0x5000
+95. page_ptr = 0xFFFFEA0000000000 + 0x5000 × 0x40
+96.          = 0xFFFFEA0000000000 + 0x140000
+97.          = 0xFFFFEA0000140000
+```
+
+---
+
+```
+AXIOM 9: struct page contains _mapcount and mapping fields
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct page at 0xFFFFEA0000140000:                                          │
+│   offset +0:  flags (8 bytes)                                                │
+│   offset +8:  lru.next (8 bytes)                                            │
+│   offset +16: lru.prev (8 bytes)                                            │
+│   offset +24: mapping (8 bytes) ← points to anon_vma or address_space       │
+│   offset +32: index (8 bytes)                                                │
+│   offset +40: private (8 bytes)                                              │
+│   offset +48: _mapcount (4 bytes) ← count of PTEs mapping this page         │
+│   offset +52: _refcount (4 bytes)                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+98. page = 0xFFFFEA0000140000
+99. mapping = RAM[page + 24] = 0xFFFF888020000001
+100. _mapcount = RAM[page + 48] = 0x00000001 (atomic_t, 4 bytes)
+101. _mapcount value = 1 → means 1 + 1 = 2 PTEs
+```
+
+---
+
+```
+AXIOM 10: mapping field LSB indicates anon vs file
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ If mapping & 0x1 == 1: anonymous page, mapping = anon_vma | 0x1             │
+│ If mapping & 0x1 == 0: file page, mapping = address_space pointer           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+102. mapping = 0xFFFF888020000001
+103. mapping & 0x1 = 1 → anonymous page ✓
+104. anon_vma = mapping & 0xFFFFFFFFFFFFFFFE = 0xFFFF888020000000
+```
+
+---
+
+```
+AXIOM 11: anon_vma contains rb_root (interval tree of VMAs)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct anon_vma at 0xFFFF888020000000:                                      │
+│   offset +64: rb_root (struct rb_root_cached)                               │
+│               rb_root.rb_node = pointer to first node                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+105. anon_vma = 0xFFFF888020000000
+106. rb_root_offset = 64
+107. rb_root.rb_node = RAM[0xFFFF888020000000 + 64] = 0xFFFF888021000000
+```
+
+---
+
+```
+AXIOM 12: rb_node is anon_vma_chain, contains VMA pointer
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct anon_vma_chain at 0xFFFF888021000000:                                │
+│   offset +0: vma (pointer to vm_area_struct)                                 │
+│   offset +8: anon_vma (pointer back to anon_vma)                            │
+│   offset +32: rb (struct rb_node for tree links)                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+108. node = 0xFFFF888021000000
+109. vma_ptr = RAM[node + 0] = 0xFFFF888040000000
+110. This VMA belongs to Process A
+```
+
+---
+
+```
+AXIOM 13: VMA contains vm_mm (pointer to process's mm_struct)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct vm_area_struct at 0xFFFF888040000000:                                │
+│   offset +0: vm_start                                                        │
+│   offset +8: vm_end                                                          │
+│   offset +16: vm_mm (pointer to mm_struct)                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+111. vma = 0xFFFF888040000000
+112. vm_mm = RAM[vma + 16] = 0xFFFF888060000000
+```
+
+---
+
+```
+AXIOM 14: mm_struct contains pgd (which is CR3 value)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct mm_struct at 0xFFFF888060000000:                                     │
+│   offset +varies: pgd (pointer to PML4, used as CR3)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+113. mm = 0xFFFF888060000000
+114. pgd = RAM[mm + pgd_offset] = 0x1000000 (this is CR3_A)
+```
+
+---
+
+```
+COMPLETE CHAIN: PFN → struct page → anon_vma → anon_vma_chain → VMA → mm → pgd → PTE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 115. PFN = 0x5000                                                            │
+│ 116. page = 0xFFFFEA0000140000                                              │
+│ 117. anon_vma = 0xFFFF888020000000                                          │
+│ 118. rb_node = 0xFFFF888021000000                                           │
+│ 119. vma = 0xFFFF888040000000                                                │
+│ 120. mm = 0xFFFF888060000000                                                 │
+│ 121. pgd = 0x1000000 = CR3_A                                                 │
+│ 122. vaddr = vm_start + index × 4096 = 0x7FFF00001000                       │
+│ 123. walk(pgd, vaddr) → PTE at 0x4000008                                    │
+│ 124. FOUND PTE #1 ✓                                                         │
+│                                                                              │
+│ 125. rb_node->rb_right = 0xFFFF888021000080 (second chain)                  │
+│ 126. vma = 0xFFFF888050000000                                                │
+│ 127. mm = 0xFFFF888070000000                                                 │
+│ 128. pgd = 0x10000000 = CR3_B                                                │
+│ 129. walk(pgd, vaddr) → PTE at 0x13000008                                   │
+│ 130. FOUND PTE #2 ✓                                                         │
+│                                                                              │
+│ 131. _mapcount = 1 → 2 PTEs → 2 PTEs found ✓                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
