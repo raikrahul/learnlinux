@@ -4340,3 +4340,171 @@ P05. Both anon and file pages need reverse mapping for swap/migrate
 ```
 
 ---
+
+### PLANNING DOCUMENT: CR3 → RB_TREE TRACE (NO SOLUTIONS)
+
+```
+KNOWN AXIOM (user understands): CR3 = 64-bit register holding physical address of PML4 table
+QUESTION 01: What instruction loads CR3? Where in kernel boot does this happen?
+QUESTION 02: Before CR3 is loaded, what address translation exists?
+QUESTION 03: What physical address does CR3 hold at boot vs after init?
+```
+
+```
+TASK GRILL 01: TRACE CR3 INITIALIZATION
+├── Q01a: What file contains first CR3 write? arch/x86/kernel/head_64.S? arch/x86/boot/?.
+├── Q01b: What value is written to CR3 first time?
+├── Q01c: Is this PML4 in .data section or dynamically allocated?
+├── Q01d: How does kernel set up initial page tables before CR3 load?
+├── Q01e: Does kernel run with paging disabled before first CR3 write?
+├── Q01f: What happens if CR3 contains invalid physical address?
+└── NEED: Fetch arch/x86/kernel/head_64.S from /usr/src/linux-source-6.8.0
+```
+
+```
+TASK GRILL 02: FROM CR3 TO PAGE TABLE ENTRIES
+├── Q02a: CR3 holds physical address. How does kernel read physical memory?
+├── Q02b: Before paging enabled, phys=virt? After paging enabled, how to read phys?
+├── Q02c: What is __va() macro? How does it convert phys→virt?
+├── Q02d: What is page_offset_base on your machine?
+├── Q02e: Is page_offset_base same on every boot? KASLR?
+├── Q02f: How does kernel walk page table entries?
+└── NEED: Fetch arch/x86/include/asm/page.h for __va() definition
+```
+
+```
+TASK GRILL 03: FROM PAGE TABLE TO struct page
+├── Q03a: PTE contains PFN. How does kernel convert PFN to struct page*?
+├── Q03b: What is vmemmap?
+├── Q03c: What is sizeof(struct page)?
+├── Q03d: Formula: page_ptr = vmemmap + PFN × sizeof(struct page). Derive this.
+├── Q03e: vmemmap is virtual address. How is vmemmap itself mapped?
+├── Q03f: Does vmemmap exist before mm_init()?
+└── NEED: Fetch include/asm-generic/memory_model.h for pfn_to_page()
+```
+
+```
+TASK GRILL 04: FROM struct page TO mapping FIELD
+├── Q04a: struct page has field "mapping". What offset?
+├── Q04b: How was offset 24 calculated? sizeof(flags) + sizeof(lru)?
+├── Q04c: mapping can be NULL, address_space*, or anon_vma*. How to distinguish?
+├── Q04d: What is PAGE_MAPPING_ANON value? 0x1? 0x2?
+├── Q04e: Who sets page->mapping? During what operation?
+├── Q04f: Can mapping change after set?
+└── NEED: Fetch include/linux/mm_types.h for struct page definition
+```
+
+```
+TASK GRILL 05: FROM mapping TO anon_vma OR address_space
+├── Q05a: If (mapping & 0x1) == 1, page is anonymous. Where is this defined?
+├── Q05b: anon_vma = mapping & ~0x1. Why mask off LSB?
+├── Q05c: If (mapping & 0x1) == 0, page is file-backed. mapping = address_space*.
+├── Q05d: Where does anon_vma come from? Who allocates it?
+├── Q05e: Where does address_space come from? inode->i_mapping?
+├── Q05f: Can a page switch from anon to file or vice versa?
+└── NEED: Fetch include/linux/page-flags.h for PAGE_MAPPING_ANON
+```
+
+```
+TASK GRILL 06: WHAT IS anon_vma STRUCTURE
+├── Q06a: anon_vma has field rb_root. What offset within struct?
+├── Q06b: rb_root is struct rb_root_cached. What is rb_root_cached?
+├── Q06c: rb_root_cached has rb_root.rb_node. This points to first tree node.
+├── Q06d: Each rb_node is embedded in struct anon_vma_chain. At what offset?
+├── Q06e: How to get anon_vma_chain* from rb_node*? container_of macro?
+├── Q06f: container_of(ptr, type, member) = (type*)((char*)ptr - offsetof(type, member)).
+└── NEED: Fetch include/linux/rmap.h for struct anon_vma, struct anon_vma_chain
+```
+
+```
+TASK GRILL 07: WHAT IS RB_TREE
+├── Q07a: rb_tree = red-black tree = self-balancing binary search tree.
+├── Q07b: What makes it self-balancing? Color property? Height property?
+├── Q07c: What are the 5 rb_tree properties?
+├── Q07d: Why O(log N) operations?
+├── Q07e: N=105 → log₂(105)=6.7 → max 7 comparisons. Verify this.
+├── Q07f: rb_node has rb_parent_color, rb_left, rb_right. What is rb_parent_color encoding?
+└── NEED: Fetch include/linux/rbtree.h for struct rb_node, struct rb_root
+```
+
+```
+TASK GRILL 08: WHAT IS INTERVAL TREE
+├── Q08a: Interval tree = rb_tree where each node stores [start, end] range.
+├── Q08b: anon_vma uses interval tree. What are start,end for VMA?
+├── Q08c: start = vm_pgoff? end = vm_pgoff + vma_pages - 1?
+├── Q08d: Query: "find all intervals containing point X". How does this work?
+├── Q08e: Interval tree adds "subtree_last" field. What is this?
+├── Q08f: subtree_last = max(node.end, left.subtree_last, right.subtree_last)?
+└── NEED: Fetch include/linux/interval_tree.h for INTERVAL_TREE_DEFINE
+```
+
+```
+TASK GRILL 09: HOW DOES libc_map_trace.c USE ANY OF THIS?
+├── Q09a: libc_map_trace.c reads /proc/PID/maps. Where does kernel generate this?
+├── Q09b: Kernel function: show_map_vma() in fs/proc/task_mmu.c?
+├── Q09c: show_map_vma() reads VMA. VMA is per-process. No rb_tree here?
+├── Q09d: WAIT: libc_map_trace.c does NOT use rb_tree directly.
+├── Q09e: rb_tree is used by KERNEL when doing reverse mapping.
+├── Q09f: User program COUNTS processes. Kernel USES rb_tree to find PTEs.
+└── CRITICAL: Distinguish user observation vs kernel operation.
+```
+
+```
+TASK GRILL 10: WHEN DOES KERNEL USE RB_TREE FOR LIBC.SO.6?
+├── Q10a: Kernel needs to swap page 45 of libc.so.6.
+├── Q10b: page->mapping = address_space of libc.so.6 (file-backed, not anon).
+├── Q10c: For file pages: address_space->i_mmap is the interval tree.
+├── Q10d: NOT anon_vma->rb_root. Different structure for file pages.
+├── Q10e: Kernel queries i_mmap: "which VMAs contain page 45?"
+├── Q10f: Result: 105 VMAs, one from each process. Then walk their page tables.
+└── NEED: Fetch include/linux/fs.h for struct address_space, i_mmap field.
+```
+
+```
+TRACE PATH (to be verified with kernel sources):
+boot → CR3 → PML4 → ... → PTE → PFN → struct page → mapping → address_space → i_mmap → rb_tree
+                                                 ↓                              ↓
+                                             anon_vma → rb_root → interval tree (for anon pages)
+```
+
+```
+COUNTER QUESTIONS:
+C01: Does libc_map_trace.c touch rb_tree? NO. It reads /proc/PID/maps.
+C02: Does kernel use rb_tree when generating /proc/PID/maps? NO. Just iterates VMA list.
+C03: When exactly does kernel use rb_tree for libc? During swap, migration, munmap of file.
+C04: Is this interval tree same as anon_vma->rb_root? NO. File uses address_space->i_mmap.
+C05: Can user program observe rb_tree directly? NO. Only kernel has access.
+```
+
+```
+KERNEL SOURCE FILES TO FETCH:
+F01: /usr/src/linux-source-6.8.0/arch/x86/kernel/head_64.S (CR3 init)
+F02: /usr/src/linux-source-6.8.0/arch/x86/include/asm/page.h (__va macro)
+F03: /usr/src/linux-source-6.8.0/include/asm-generic/memory_model.h (pfn_to_page)
+F04: /usr/src/linux-source-6.8.0/include/linux/mm_types.h (struct page)
+F05: /usr/src/linux-source-6.8.0/include/linux/rmap.h (anon_vma, anon_vma_chain)
+F06: /usr/src/linux-source-6.8.0/include/linux/rbtree.h (rb_node, rb_root)
+F07: /usr/src/linux-source-6.8.0/include/linux/fs.h (address_space, i_mmap)
+F08: /usr/src/linux-source-6.8.0/fs/proc/task_mmu.c (show_map_vma)
+```
+
+```
+NEW THINGS INTRODUCED WITHOUT DERIVATION IN PREVIOUS RESPONSE:
+N01: major(st_dev)=259, minor(st_dev)=5 → did not derive st_dev bit layout
+N02: 66309 = 259×256 + 5 → assumed 8-bit minor without proof
+N03: /dev/nvme0n1p5 → assumed device name without derivation
+```
+
+```
+AXIOM CHAIN REQUIRED:
+A01: CPU register CR3 contains physical address (Intel SDM Vol 3A, Section 4.5)
+A02: Physical address = index into RAM bytes
+A03: struct page* = vmemmap + PFN × 64 (memory_model.h, sparse memory model)
+A04: page->mapping at offset 24 (mm_types.h, anonymous union)
+A05: (mapping & 1) → anon_vma at (mapping & ~1) (rmap.h, PAGE_MAPPING_ANON)
+A06: (mapping & 1) == 0 → address_space* (rmap.h)
+A07: address_space->i_mmap = interval tree root (fs.h)
+A08: Interval tree operations O(log N + M) (interval_tree.h)
+```
+
+---
