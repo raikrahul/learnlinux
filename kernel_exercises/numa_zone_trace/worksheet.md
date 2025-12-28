@@ -885,3 +885,184 @@ CORRECT MODEL:
 ```
 
 ---
+
+### Q13: STRUCT PAGE FIELDS FOR MALLOC, FILE, SOCKET
+
+174. WHY THIS SECTION: You asked what happens to struct page fields for malloc, file open, socket.
+
+---
+
+### SCENARIO 1: MALLOC (ANONYMOUS MEMORY)
+
+175. USER CODE:
+```c
+char *buf = malloc(8192);  // 8192 bytes = 2 pages
+buf[0] = 'A';              // First write triggers page fault
+```
+
+176. KERNEL PATH: malloc → brk/mmap syscall → page fault → do_anonymous_page()
+
+177. SOURCE: `/usr/src/linux-source-6.8.0/mm/memory.c` line 4259-4379
+
+178. DRAW (struct page after malloc + first access):
+```
+ANONYMOUS PAGE (from do_anonymous_page):
++----------+----------------------------------------------+
+| FIELD    | VALUE                                        |
++----------+----------------------------------------------+
+| flags    | PG_uptodate | PG_lru | PG_swapbacked         |
+|          | + zone bits (Normal) + node bits (0)         |
++----------+----------------------------------------------+
+| _refcount| 1 (allocated, one user)                      |
++----------+----------------------------------------------+
+| _mapcount| 0 (mapped in 1 page table: user process)     |
++----------+----------------------------------------------+
+| mapping  | 0xFFFF...001 (anon_vma pointer | 0x1)        |
+|          | LSB=1 means ANONYMOUS (PAGE_MAPPING_ANON)    |
++----------+----------------------------------------------+
+| index    | Virtual address >> PAGE_SHIFT (page offset)  |
++----------+----------------------------------------------+
+| private  | 0 (not used for anon pages in normal state)  |
++----------+----------------------------------------------+
+| lru      | Linked into LRU list (active_anon list)      |
++----------+----------------------------------------------+
+```
+
+179. KEY SOURCE LINE (mm/memory.c:4359):
+```c
+folio_add_new_anon_rmap(folio, vma, addr);  // Sets mapping to anon_vma | 0x1
+```
+
+180. HOW TO DETECT ANONYMOUS:
+```c
+// Source: include/linux/page-flags.h line 649-672
+#define PAGE_MAPPING_ANON 0x1
+bool is_anon = (page->mapping & PAGE_MAPPING_ANON) != 0;
+```
+
+---
+
+### SCENARIO 2: FILE READ (FILE-BACKED MEMORY)
+
+181. USER CODE:
+```c
+int fd = open("/etc/passwd", O_RDONLY);
+char *buf = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+char c = buf[0];  // Triggers page fault → reads file
+```
+
+182. KERNEL PATH: open → mmap → page fault → __do_fault → filemap_fault
+
+183. DRAW (struct page after file read):
+```
+FILE-BACKED PAGE (from filemap_fault):
++----------+----------------------------------------------+
+| FIELD    | VALUE                                        |
++----------+----------------------------------------------+
+| flags    | PG_uptodate | PG_lru | PG_referenced          |
+|          | + zone bits + node bits                      |
++----------+----------------------------------------------+
+| _refcount| 2+ (page cache + mmap)                       |
++----------+----------------------------------------------+
+| _mapcount| 0 (mapped in 1 page table)                   |
++----------+----------------------------------------------+
+| mapping  | 0xFFFF888012345000 (address_space of file)   |
+|          | LSB=0 means FILE-BACKED (not anon)           |
++----------+----------------------------------------------+
+| index    | 0 (offset 0 in file, in pages)               |
+|          | If reading offset 8192, index = 2            |
++----------+----------------------------------------------+
+| private  | buffer_head pointer (for some filesystems)   |
++----------+----------------------------------------------+
+| lru      | Linked into LRU list (inactive_file list)    |
++----------+----------------------------------------------+
+```
+
+184. KEY: mapping points to address_space = { inode, pages tree, ... }
+
+185. SOURCE (mm/memory.c:4574):
+```c
+folio_add_file_rmap_ptes(folio, page, nr, vma);  // Increments _mapcount
+```
+
+186. HOW KERNEL KNOWS IT'S FILE:
+```c
+// mapping != NULL and LSB = 0 → file-backed
+struct address_space *as = page->mapping;  // No bit manipulation
+struct inode *inode = as->host;            // The file's inode
+```
+
+---
+
+### SCENARIO 3: SOCKET (NETWORK BUFFER)
+
+187. USER CODE:
+```c
+int sock = socket(AF_INET, SOCK_STREAM, 0);
+// ...connect...
+send(sock, "hello", 5, 0);
+```
+
+188. KERNEL PATH: send syscall → socket layer → sk_buff allocation → page as fragment
+
+189. IMPORTANT: Sockets use sk_buff (socket buffer), NOT struct page directly for small data. BUT for large sends or zero-copy, pages are used.
+
+190. DRAW (struct page for socket fragment):
+```
+SOCKET PAGE (from sock_alloc_send_pskb):
++----------+----------------------------------------------+
+| FIELD    | VALUE                                        |
++----------+----------------------------------------------+
+| flags    | PG_slab (if from slab) or normal page flags  |
++----------+----------------------------------------------+
+| _refcount| 1+ (held by sk_buff)                         |
++----------+----------------------------------------------+
+| _mapcount| -1 (NOT mapped in any user page table)       |
++----------+----------------------------------------------+
+| mapping  | NULL (not file-backed, not anonymous)        |
++----------+----------------------------------------------+
+| index    | unused for network                           |
++----------+----------------------------------------------+
+| private  | may hold skb pointer or fragment info        |
++----------+----------------------------------------------+
+| lru      | NOT in LRU (network pages don't get reclaimed)|
++----------+----------------------------------------------+
+```
+
+191. SOURCE (net/core/sock.c:2757):
+```c
+struct sk_buff *sock_alloc_send_pskb(struct sock *sk, unsigned long header_len,
+                                      unsigned long data_len, int noblock, int *errcode)
+```
+
+192. KEY DIFFERENCE: Socket pages are:
+- _mapcount = -1 (never user-mapped)
+- mapping = NULL (no file backing)
+- Not on LRU (kernel controls lifetime)
+
+---
+
+### COMPARISON TABLE
+
+193. DRAW:
+```
++-------------+------------+------------+-------------+-------------+
+| SCENARIO    | mapping    | _mapcount  | index       | lru         |
++-------------+------------+------------+-------------+-------------+
+| malloc      | anon_vma|1 | 0+         | vaddr>>12   | active_anon |
+| file mmap   | addr_space | 0+         | file offset | inactive_file|
+| socket      | NULL       | -1         | unused      | not in LRU  |
++-------------+------------+------------+-------------+-------------+
+| DETECTION   | LSB=1→anon | -1→unmapped| file:pageidx| reclaim?    |
+|             | LSB=0→file |  0+→mapped | anon:vaddr  |             |
++-------------+------------+------------+-------------+-------------+
+```
+
+194. FLAGS SUMMARY:
+```
+malloc page:  PG_uptodate | PG_lru | PG_swapbacked | PG_anon
+file page:    PG_uptodate | PG_lru | PG_referenced
+socket page:  may have PG_slab, no PG_lru
+```
+
+---
