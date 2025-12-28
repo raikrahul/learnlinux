@@ -2457,3 +2457,226 @@ A2: Kernel sets up KERNEL page tables at boot.
 ```
 
 ---
+
+### Q21: PTE VS PFN - WHAT IS THE DIFFERENCE?
+
+325. YOUR QUESTIONS:
+```
+1. What is difference between PTE and PFN?
+2. How does PTE go to PFN?
+3. Is PTE a virtual address?
+```
+
+---
+
+### DEFINITIONS
+
+326. PFN (Page Frame Number):
+```
+PFN = Physical address of a page, divided by PAGE_SIZE.
+PFN = physical_address >> 12
+PFN is just a NUMBER (unsigned long).
+Example: PFN = 0x12345 means physical address 0x12345000
+```
+
+327. PTE (Page Table Entry):
+```
+PTE = 8-byte value stored in page table.
+PTE CONTAINS: PFN + permission bits + status bits.
+PTE is stored in RAM, at a physical address.
+```
+
+328. KEY DIFFERENCE:
+```
+PFN: just a number (the physical page number)
+PTE: a data structure (contains PFN + flags)
+
+PTE is NOT a virtual address.
+PTE is a VALUE that encodes PFN and flags.
+```
+
+---
+
+### PTE BIT LAYOUT (x86_64)
+
+329. DRAW (64-bit PTE format):
+```
+PTE (64 bits = 8 bytes):
++--------------------------------------------------------------+
+| 63 | 62-52 | 51-12          | 11-9 | 8 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
++----+-------+----------------+------+---+---+---+---+---+---+---+---+---+
+| NX | Avail | PFN (40 bits)  | SW   | G | PS| D | A |PCD|PWT|U/S|R/W| P |
++--------------------------------------------------------------+
+
+Bit 0:  P   = Present (1=page in RAM, 0=not present or swapped)
+Bit 1:  R/W = Read/Write (1=writable, 0=read-only)
+Bit 2:  U/S = User/Supervisor (1=user accessible, 0=kernel only)
+Bit 3:  PWT = Page Write-Through (caching)
+Bit 4:  PCD = Page Cache Disable (caching)
+Bit 5:  A   = Accessed (set by MMU on read/write)
+Bit 6:  D   = Dirty (set by MMU on write)
+Bit 7:  PS  = Page Size (0=4KB, 1=huge page)
+Bit 8:  G   = Global (don't flush on CR3 change)
+Bits 9-11:  Software available (OS can use)
+Bits 12-51: PFN (40 bits = physical address bits 12-51)
+Bits 52-62: Available for software
+Bit 63: NX  = No Execute (1=not executable)
+```
+
+---
+
+### KERNEL SOURCE: pte_pfn() function
+
+330. FILE: `/usr/src/linux-source-6.8.0/arch/x86/include/asm/pgtable.h` line 229-234
+
+331. SOURCE:
+```c
+static inline unsigned long pte_pfn(pte_t pte)
+{
+    phys_addr_t pfn = pte_val(pte);             // Get raw 64-bit value
+    pfn ^= protnone_mask(pfn);                   // Handle PROT_NONE pages
+    return (pfn & PTE_PFN_MASK) >> PAGE_SHIFT;   // Extract PFN
+}
+```
+
+332. PTE_PFN_MASK (from pgtable_types.h):
+```c
+#define PTE_PFN_MASK  ((phys_addr_t)PHYSICAL_PAGE_MASK)
+// PHYSICAL_PAGE_MASK = 0x000FFFFFFFFFF000 (bits 12-51)
+```
+
+333. ALGORITHM:
+```
+Given PTE value: 0x8000000012345067
+                 ^^^^^^^^^^^^   ^^^
+                 | PFN bits      | flags
+
+Step 1: pte_val(pte) = 0x8000000012345067
+Step 2: pfn & PTE_PFN_MASK = 0x0000000012345000 (mask off flags and NX)
+Step 3: >> PAGE_SHIFT = 0x0000000012345000 >> 12 = 0x12345
+RESULT: PFN = 0x12345
+```
+
+---
+
+### KERNEL SOURCE: pfn_pte() - CREATE PTE FROM PFN
+
+334. FILE: `/usr/src/linux-source-6.8.0/arch/x86/include/asm/pgtable.h` line 753-759
+
+335. SOURCE:
+```c
+static inline pte_t pfn_pte(unsigned long page_nr, pgprot_t pgprot)
+{
+    phys_addr_t pfn = (phys_addr_t)page_nr << PAGE_SHIFT;  // PFN → physical bits
+    pfn ^= protnone_mask(pgprot_val(pgprot));
+    pfn &= PTE_PFN_MASK;                                    // Mask to valid bits
+    return __pte(pfn | check_pgprot(pgprot));               // Combine PFN + flags
+}
+```
+
+336. ALGORITHM:
+```
+Given: PFN = 0x12345, permissions = 0x067 (Present, R/W, User, Accessed, Dirty)
+
+Step 1: pfn << PAGE_SHIFT = 0x12345 << 12 = 0x12345000
+Step 2: pfn & PTE_PFN_MASK = 0x12345000 (already clean)
+Step 3: pfn | pgprot = 0x12345000 | 0x067 = 0x12345067
+RESULT: PTE = 0x12345067
+```
+
+---
+
+### IS PTE A VIRTUAL ADDRESS?
+
+337. ANSWER: NO. Let me clarify all addresses involved.
+
+338. DRAW:
+```
++------------------+---------------------+---------------------------+
+| ITEM             | TYPE                | EXAMPLE                   |
++------------------+---------------------+---------------------------+
+| PFN              | Just a number       | 0x12345 (no address)      |
++------------------+---------------------+---------------------------+
+| PTE value        | 8-byte data         | 0x8000000012345067        |
+|                  | (contains PFN+flags)|                           |
++------------------+---------------------+---------------------------+
+| PTE location     | Physical address    | Page table is in RAM at   |
+| (where PTE lives)| (also virt via      | physical addr 0xABC000    |
+|                  | direct map)         | Entry at 0xABC000 + idx*8 |
++------------------+---------------------+---------------------------+
+| Virtual address  | User's address      | 0x7FFE1234000 (vaddr)     |
+| being translated |                     |                           |
++------------------+---------------------+---------------------------+
+```
+
+339. CLARIFICATION:
+```
+PTE itself: is DATA, not an address
+PTE value: contains PFN (which encodes physical address)
+PTE storage: PTEs are stored in page tables, which are in RAM
+```
+
+---
+
+### HOW DOES PTE GO TO PFN? (STEP BY STEP)
+
+340. SCENARIO: CPU executes instruction at virtual address 0x7FFE123456
+
+341. STEPS:
+```
+1. CPU issues virtual address: 0x7FFE123456
+
+2. MMU breaks down virtual address:
+   Bits 47-39: PML4 index = 255
+   Bits 38-30: PDPT index = 504
+   Bits 29-21: PD index = 289
+   Bits 20-12: PT index = 291
+   Bits 11-0:  Page offset = 0x456
+
+3. MMU reads PML4[255] → gets PDPT physical address
+4. MMU reads PDPT[504] → gets PD physical address
+5. MMU reads PD[289] → gets PT physical address
+6. MMU reads PT[291] → THIS IS THE PTE! Value = 0x12345067
+
+7. MMU extracts PFN from PTE:
+   pte_pfn(0x12345067) = (0x12345067 & 0xFFFFFFFFF000) >> 12 = 0x12345
+
+8. MMU calculates physical address:
+   physical = (PFN << 12) | page_offset = (0x12345 << 12) | 0x456 = 0x12345456
+
+9. CPU reads/writes physical address 0x12345456 in RAM
+```
+
+342. DRAW:
+```
+Virtual address: 0x7FFE123456
+         ↓ (page table walk)
+PTE at PT[291]: 0x12345067
+         ↓ (extract PFN)
+PFN: 0x12345
+         ↓ (combine with offset)
+Physical address: 0x12345456
+         ↓ (RAM access)
+Data at 0x12345456
+```
+
+---
+
+### SUMMARY
+
+343. ANSWERS:
+```
+Q1: PTE vs PFN difference?
+A1: PFN = page number (just a number, bits 12-51 of physical address >> 12)
+    PTE = 8-byte value stored in page table (contains PFN + permission flags)
+
+Q2: How does PTE go to PFN?
+A2: pte_pfn(pte) = (pte_val & PTE_PFN_MASK) >> PAGE_SHIFT
+    Source: arch/x86/include/asm/pgtable.h line 229-234
+
+Q3: Is PTE a virtual address?
+A3: NO. PTE is a VALUE (data). PTEs are stored at physical addresses in RAM.
+    The PTE VALUE contains a PFN which encodes a physical address.
+```
+
+---
