@@ -5417,3 +5417,73 @@ R05. When two things seem same: subtract addresses, non-zero = different
 ```
 
 ---
+
+### Q36: VMA vs PFN vs PTE - WHAT SATISFIES PAGE FAULT (kernel source proof)
+
+```
+CONFUSION: "Kernel can satisfy #PF using this VMA"
+WRONG: VMA satisfies #PF
+RIGHT: PFN satisfies #PF. VMA is metadata telling kernel WHAT to do.
+```
+
+```
+DEFINITIONS:
+VMA = struct vm_area_struct = metadata: (vaddr range, file, permissions, offset)
+PFN = physical frame number = actual 4096-byte RAM page
+PTE = page table entry = vaddr→PFN mapping stored in page table
+```
+
+```
+KERNEL SOURCE PROOF (/usr/src/linux-source-6.8.0/mm/filemap.c):
+
+Line 3226-3230 (function purpose):
+  * filemap_fault - read in file data for page fault handling
+  * filemap_fault() is invoked via the vma operations vector for a
+  * mapped memory region to read in file data during a page fault.
+
+Line 3248: vm_fault_t filemap_fault(struct vm_fault *vmf)
+Line 3251: struct file *file = vmf->vma->vm_file;  ← VMA tells kernel WHICH file
+Line 3253: struct address_space *mapping = file->f_mapping;  ← file's page cache
+Line 3255: pgoff_t index = vmf->pgoff;  ← VMA tells kernel WHICH page of file
+Line 3267: folio = filemap_get_folio(mapping, index);  ← get page from cache (or allocate PFN)
+Line 3365: vmf->page = folio_file_page(folio, index);  ← return the PFN
+Line 3366: return ret | VM_FAULT_LOCKED;  ← fault handler returns with page locked
+
+Line 3504 (in filemap_map_folio_range):
+  set_pte_range(vmf, folio, page, count, addr);  ← creates PTE: vaddr→PFN
+```
+
+```
+#PF CHAIN (with kernel line numbers):
+
+01. #PF at vaddr 0x777bc6c60100 → CPU triggers interrupt 14
+02. arch/x86/mm/fault.c do_page_fault() → gets fault_address
+03. mm/memory.c handle_mm_fault(vma, addr, flags) → VMA passed in
+04. VMA tells kernel: "this is file-backed, call vma->vm_ops->fault"
+05. mm/filemap.c filemap_fault() line 3248 → reads vmf->vma->vm_file
+06. filemap_get_folio() line 3267 → allocates PFN, reads file data from disk
+07. set_pte_range() line 3504 → creates PTE: vaddr→PFN
+08. Return from #PF → CPU retries → MMU finds PTE → translates vaddr to physical
+
+∴ VMA = decision table (which file? which page? permissions?)
+∴ PFN = actual RAM allocated by kernel
+∴ PTE = mapping written to page table
+∴ #PF satisfied when PTE exists and points to valid PFN
+```
+
+```
+REAL DATA EXAMPLE:
+vaddr = 0x777bc6c60100 (printf)
+vm_start = 0x777bc6c28000
+vm_pgoff = 40
+file_page = 40 + (0x777bc6c60100 - 0x777bc6c28000) / 4096 = 40 + 56 = 96
+
+VMA says: "vaddr 0x777bc6c60100 → read file page 96 of libc.so.6"
+filemap_fault() allocates PFN 0x123456, reads libc.so.6 page 96 into it
+set_pte_range() creates PTE: vaddr 0x777bc6c60000 → PFN 0x123456
+
+AFTER #PF:
+CPU accesses 0x777bc6c60100 → MMU reads PTE → physical = 0x123456×4096 + 0x100 = 0x123456100
+```
+
+---
