@@ -5908,4 +5908,71 @@ SUMMARY TABLE:
 
 ---
 
+### Q41: mm_struct AND REVERSE MAPPING (RMAP) FROM PFN TO vaddr
+
+```
+Q: Does each process have one mm_struct?
+A: Yes. One process = one mm_struct = many VMAs inside.
+
+STRUCTURE:
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ task_struct (process, pid=12345)                                                                 │
+│   mm = 0xFFFF888022220000 ───────────────────────────────────────────────────────────────────┐   │
+└──────────────────────────────────────────────────────────────────────────────────────────────│───┘
+                                                                                               │
+                                                                                               ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ mm_struct at 0xFFFF888022220000                                                                  │
+│   pgd = 0xFFFF888011110000 (page table root, loaded into CR3)                                    │
+│   mmap = VMA linked list head                                                                    │
+│   mm_rb = red-black tree of VMAs (fast vaddr→VMA lookup)                                         │
+│                                                                                                  │
+│   VMA #1: vm_start=0x55a8c0400000, vm_file=/usr/bin/cat                                          │
+│   VMA #2: vm_start=0x795df3828000, vm_file=libc.so.6, vm_pgoff=40                                │
+│   VMA #3: vm_start=0x795df4028000, vm_file=libm.so.6                                             │
+│   VMA #4: vm_start=0x7ffd8c000000, vm_file=NULL (stack)                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+Q: Does mm_struct know about inode?
+A: NO. mm_struct does NOT have inode pointer.
+   VMA.vm_file knows inode: VMA → vm_file → f_mapping → address_space → host → inode
+   mm_struct contains VMAs, so INDIRECTLY mm_struct can reach inodes through VMAs.
+```
+
+```
+Q: What is relation of RMAP to PFN logic?
+
+RMAP = Reverse Mapping = Given PFN, find all vaddrs in all processes pointing to it
+
+FORWARD: vaddr → PTE → PFN
+  Process walks page table: vaddr → PGD → PUD → PMD → PTE → PFN
+
+REVERSE: PFN → ??? → vaddr (multiple!)
+  PFN 0x123456 → page→mapping → address_space → ???
+
+RMAP CHAIN FOR FILE-BACKED PAGE:
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 01. Start: PFN 0x123456                                                                                             │
+│ 02. page = &mem_map[0x123456]                                                                                       │
+│ 03. page→mapping = 0xFFFF888012340100 (libc's address_space)                                                        │
+│ 04. page→index = 45 (file chunk 45)                                                                                 │
+│ 05. Kernel searches ALL processes: for each task_struct...                                                          │
+│ 06.   for each VMA in task→mm→mmap...                                                                               │
+│ 07.     if VMA.vm_file→f_mapping == page→mapping (0xFFFF888012340100)...                                            │
+│ 08.       if vm_pgoff ≤ 45 < vm_pgoff + vma_pages...                                                                │
+│ 09.         vaddr = vm_start + (45 - vm_pgoff) × 4096                                                               │
+│ 10.         → Found! Process pid=12345, vaddr=0x795df382D000 maps to PFN 0x123456                                   │
+│ 11.         Kernel can now walk page table and clear/modify PTE                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+∴ RMAP uses: page→mapping (which file) + page→index (which chunk)
+∴ RMAP searches: all processes → all mm_structs → all VMAs → matching vm_file
+∴ RMAP calculates: vaddr = vm_start + (page→index - vm_pgoff) × 4096
+```
+
+---
+
+
 
