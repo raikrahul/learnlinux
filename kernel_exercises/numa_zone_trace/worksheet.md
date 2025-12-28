@@ -5266,3 +5266,58 @@ N05. symbol offset in .dynsym → derived from ELF symbol table format, nm -D sh
 ```
 
 ---
+
+### Q35: /proc/self/maps COLUMN BREAKDOWN (real data)
+
+```
+REAL DATA FROM YOUR MACHINE (2025-12-28):
+79fa4da28000-79fa4dbb0000 r-xp 00028000 103:05 5160837 /usr/lib/x86_64-linux-gnu/libc.so.6
+```
+
+```
+COLUMN BREAKDOWN:
+┌─────────────────┬─────────────────┬────────────────────────────────────────────────────────────┐
+│ Column          │ Value           │ Meaning                                                     │
+├─────────────────┼─────────────────┼────────────────────────────────────────────────────────────┤
+│ start           │ 79fa4da28000    │ VMA start vaddr in THIS process                            │
+│ end             │ 79fa4dbb0000    │ VMA end vaddr (exclusive) in THIS process                  │
+│ perms           │ r-xp            │ read=✓, write=✗, execute=✓, private (COW)                  │
+│ offset          │ 00028000        │ byte offset INTO the file in pathname column               │
+│ dev             │ 103:05          │ major:minor device number = 259:5 decimal                  │
+│ inode           │ 5160837         │ inode number of the file on that device                    │
+│ pathname        │ /usr/lib/.../libc.so.6 │ the file being mapped                              │
+└─────────────────┴─────────────────┴────────────────────────────────────────────────────────────┘
+```
+
+```
+KEY INSIGHT: offset IS INTO pathname FILE, NOT INTO YOUR EXECUTABLE
+
+PROOF:
+run: stat /usr/lib/x86_64-linux-gnu/libc.so.6
+  Inode: 5160837 ✓ (matches inode column)
+  Device: 259,5 = 103:05 in hex ✓ (matches dev column)
+  Size: 2125328 bytes
+  offset 0x28000 = 163840 bytes < 2125328 ✓ (valid offset into libc.so.6)
+
+∴ offset 0x28000 = byte 163840 of /usr/lib/x86_64-linux-gnu/libc.so.6
+∴ offset is NOT into got_proof or cat or your executable
+∴ offset is into the FILE identified by inode+dev+pathname columns
+```
+
+```
+DEVICE NUMBER CALCULATION:
+dev column = 103:05 (hex)
+major = 0x103 = 259 decimal
+minor = 0x05 = 5 decimal
+run: ls -la /dev/disk/by-id/ → find device 259:5 → your root filesystem disk
+
+inode column = 5160837
+run: ls -i /usr/lib/x86_64-linux-gnu/libc.so.6 → 5160837 /usr/lib/.../libc.so.6 ✓
+```
+
+```
+∴ Each line in /proc/maps: vaddr_range + permissions + file_offset + device:inode + filepath
+∴ offset column answers: "This VMA starts reading from byte X of the file in pathname column"
+```
+
+---
