@@ -4283,3 +4283,60 @@ AXIOM CHECK - DID I INTRODUCE NEW THINGS?
 ```
 
 ---
+
+### ERROR REPORT - SESSION 2025-12-28
+
+```
+E01. Confused _mapcount with RMAP
+     WRONG: thought _mapcount tells WHERE PTEs are
+     RIGHT: _mapcount tells HOW MANY, RMAP tells WHERE
+     WHY SLOPPY: conflated counter with index
+     FIX: _mapcount = O(1) read, RMAP = O(log N) tree walk
+
+E02. Thought VMA stores PFN
+     WRONG: assumed VMA contains physical addresses
+     RIGHT: VMA stores vm_start/vm_end (virtual), vm_pgoff (file offset)
+     WHY SLOPPY: confused software struct with hardware mapping
+     FIX: PTE stores PFN, VMA stores range metadata
+
+E03. Confused forward vs reverse lookup
+     WRONG: thought mmap/munmap finds PTEs from pages
+     RIGHT: mmap/munmap walks YOUR page table from YOUR vaddr
+     WHY SLOPPY: didn't distinguish per-process vs system-wide
+     FIX: forward = process knows vaddr, reverse = kernel has page
+
+E04. Thought anon_vma only for anonymous pages
+     WRONG: assumed file pages don't need reverse mapping
+     RIGHT: file pages use address_space->i_mmap tree
+     WHY SLOPPY: didn't realize both types need "page→VMAs" lookup
+     FIX: anon uses anon_vma, file uses address_space, both have trees
+
+E05. Confused why VMA has no rb_tree but anon_vma does
+     WRONG: thought VMA should have tree for page lookup
+     RIGHT: VMA is per-process, anon_vma is shared across processes
+     WHY SLOPPY: didn't understand reverse mapping crosses process boundaries
+     FIX: tree is for finding ALL VMAs from ALL processes for ONE page
+
+E06. Didn't understand page->index for file pages
+     WRONG: thought page->index = vaddr >> 12
+     RIGHT: page->index = byte_offset / 4096 = page number in file
+     WHY SLOPPY: conflated virtual address with file offset
+     FIX: page->index for file = file page number, for anon = vma-relative
+
+E07. Didn't understand vm_pgoff
+     WRONG: thought vm_pgoff = 0 always
+     RIGHT: vm_pgoff = offset_in_file / 4096 from /proc/PID/maps "offset" column
+     WHY SLOPPY: ignored offset field in maps output
+     FIX: VMA1 offset=0x28000 → vm_pgoff=40
+```
+
+```
+PREVENTION:
+P01. Always trace from kernel struct definitions before assumptions
+P02. Draw "forward lookup" vs "reverse lookup" diagram first
+P03. Check /proc/PID/maps offset column before assuming vm_pgoff=0
+P04. Remember: page doesn't know who maps it → needs external index
+P05. Both anon and file pages need reverse mapping for swap/migrate
+```
+
+---

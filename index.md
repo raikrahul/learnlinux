@@ -54,6 +54,9 @@ Deep dive into Linux kernel memory management, page tables, and system internals
 | Exercise | Description |
 |----------|-------------|
 | [bootmem_trace](/kernel_exercises/bootmem_trace/) | Page Allocation and Refcount Bug |
+| [buddy_fragment](/kernel_exercises/buddy_fragment/) | Buddy Allocator Fragmentation Demo |
+| [gfp_context_bug](/kernel_exercises/gfp_context_bug/) | GFP Flag Misuse in Atomic Context |
+| [numa_zone_trace](/kernel_exercises/numa_zone_trace/) | NUMA Zones, VMA, PTE, RMAP Tracing |
 
 ## Machine Specifications
 
