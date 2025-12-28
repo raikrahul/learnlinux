@@ -1893,3 +1893,211 @@ DIFFERENT QUESTIONS. DIFFERENT ANSWERS. BOTH NEEDED.
 ```
 
 ---
+
+### Q18: KERNEL SOURCE EVIDENCE FOR _REFCOUNT AND _MAPCOUNT
+
+274. SOURCES QUERIED (on your machine):
+```
+/usr/src/linux-source-6.8.0/include/linux/page_ref.h   (300 lines)
+/usr/src/linux-source-6.8.0/include/linux/mm.h         (4243 lines)
+```
+
+---
+
+### _REFCOUNT FUNCTIONS (from page_ref.h)
+
+275. FILE: `/usr/src/linux-source-6.8.0/include/linux/page_ref.h`
+
+276. CORE READ FUNCTION (line 65-68):
+```c
+static inline int page_ref_count(const struct page *page)
+{
+    return atomic_read(&page->_refcount);
+}
+```
+→ Just reads the atomic integer. O(1).
+
+277. INCREMENT FUNCTION (line 156-161):
+```c
+static inline void page_ref_inc(struct page *page)
+{
+    atomic_inc(&page->_refcount);
+    if (page_ref_tracepoint_active(page_ref_mod))
+        __page_ref_mod(page, 1);
+}
+```
+→ Atomic increment. O(1). Can trace for debugging.
+
+278. DECREMENT AND TEST (line 208-215):
+```c
+static inline int page_ref_dec_and_test(struct page *page)
+{
+    int ret = atomic_dec_and_test(&page->_refcount);
+    // Tracing...
+    return ret;
+}
+```
+→ Returns true if refcount became 0 (page can be freed).
+
+279. WHAT INCREMENTS _refcount (from comments line 77-83):
+```c
+ * Some typical users of the folio refcount:
+ *
+ * - Each reference from a page table
+ * - The page cache
+ * - Filesystem private data
+ * - The LRU list
+ * - Pipes
+ * - Direct IO which references this page in the process address space
+```
+
+---
+
+### _MAPCOUNT FUNCTIONS (from mm.h)
+
+280. FILE: `/usr/src/linux-source-6.8.0/include/linux/mm.h`
+
+281. RESET TO -1 (line 1198-1201):
+```c
+static inline void page_mapcount_reset(struct page *page)
+{
+    atomic_set(&(page)->_mapcount, -1);
+}
+```
+→ Initial value is -1 (meaning 0 mappings).
+
+282. READ MAPCOUNT (line 1214-1225):
+```c
+static inline int page_mapcount(struct page *page)
+{
+    int mapcount = atomic_read(&page->_mapcount) + 1;  // +1 because stored as count-1
+
+    /* Handle page_has_type() pages */
+    if (mapcount < 0)
+        mapcount = 0;
+    if (unlikely(PageCompound(page)))
+        mapcount += folio_entire_mapcount(page_folio(page));
+
+    return mapcount;
+}
+```
+→ Returns actual mapping count (raw value + 1).
+
+283. CHECK IF MAPPED (line 1270-1275):
+```c
+static inline bool folio_mapped(struct folio *folio)
+{
+    if (likely(!folio_test_large(folio)))
+        return atomic_read(&folio->_mapcount) >= 0;  // >= 0 means at least 1 mapping
+    return folio_large_is_mapped(folio);
+}
+```
+→ If _mapcount >= 0, page is mapped. If -1, not mapped.
+
+---
+
+### KEY INSIGHT FROM SOURCE COMMENTS (mm.h line 1101-1112)
+
+284. SOURCE (mm.h line 1101-1112):
+```c
+/*
+ * Methods to modify the page usage count.
+ *
+ * What counts for a page usage:
+ * - cache mapping   (page->mapping)
+ * - private data    (page->private)
+ * - page mapped in a task's page tables, each mapping
+ *   is counted separately
+ *
+ * Also, many kernel routines increase the page count before a critical
+ * routine so they can be sure the page doesn't go away from under them.
+ */
+```
+
+285. THIS PROVES:
+```
+_refcount is incremented by:
+1. Each PTE mapping (same as _mapcount)
+2. Page cache holding the page
+3. Filesystem using private data
+4. Kernel routines temporarily holding reference
+
+_mapcount is ONLY incremented by:
+1. PTE mappings (page table entries)
+
+∴ _refcount >= _mapcount + 1 always (assuming no bugs)
+∴ _refcount can be much larger than _mapcount
+```
+
+---
+
+### ALGORITHM: put_page() / folio_put()
+
+286. FILE: `/usr/src/linux-source-6.8.0/include/linux/mm.h` line 1497-1501
+
+287. SOURCE:
+```c
+static inline void folio_put(struct folio *folio)
+{
+    if (folio_put_testzero(folio))  // Decrement and check if zero
+        __folio_put(folio);          // Free the page
+}
+```
+
+288. ALGORITHM:
+```
+1. Decrement _refcount atomically
+2. If _refcount becomes 0:
+   - Call __folio_put()
+   - Add page back to buddy allocator free list
+3. If _refcount > 0:
+   - Do nothing, someone else still using it
+```
+
+---
+
+### ALGORITHM: get_page()
+
+289. FILE: `/usr/src/linux-source-6.8.0/include/linux/mm.h` line 1470-1473
+
+290. SOURCE:
+```c
+static inline void get_page(struct page *page)
+{
+    folio_get(page_folio(page));  // Convert to folio, call folio_get
+}
+```
+
+291. folio_get() (line 1464-1468):
+```c
+static inline void folio_get(struct folio *folio)
+{
+    VM_BUG_ON_FOLIO(folio_ref_zero_or_close_to_overflow(folio), folio);
+    folio_ref_inc(folio);  // Increment _refcount
+}
+```
+
+292. ALGORITHM:
+```
+1. Check for overflow (debug only)
+2. Atomically increment _refcount
+3. Done
+```
+
+---
+
+### SUMMARY: KERNEL PROVES _refcount ≠ _mapcount
+
+293. EVIDENCE:
+```
+Source: page_ref.h line 77-83 lists 7 users of _refcount
+Source: mm.h line 1107-1108 says "each mapping is counted separately"
+
+_refcount users: [page table] + [page cache] + [filesystem] + [LRU] + [pipes] + [DIO] + [kernel code]
+_mapcount users: [page table only]
+
+∴ _refcount >= _mapcount + 1
+∴ They are DIFFERENT counts for DIFFERENT purposes
+```
+
+---
