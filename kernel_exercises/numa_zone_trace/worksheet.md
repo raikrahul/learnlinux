@@ -1402,11 +1402,12 @@ Each line = 1 VMA
 224. WHAT LIMITS VMA COUNT:
 ```
 Limit: /proc/sys/vm/max_map_count
-Default: 65530 VMAs per process
+Your machine: 1048576 VMAs per process (verified: cat /proc/sys/vm/max_map_count)
 
 This is kernel memory limit, NOT page table limit.
-You can have 65530 VMAs but only use a few PML4 entries.
+You can have 1048576 VMAs but only use a few PML4 entries.
 ```
+
 
 225. EXAMPLE BREAKDOWN:
 ```
