@@ -76,7 +76,7 @@ int main(void) {
 
   /* TODO BLOCK 02: Which field of libc_stat gives the inode? */
   /* HINT: The field name starts with "st_" and ends with "ino" */
-  unsigned long inode_value = libc_stat./* TODO: field name */;
+  unsigned long inode_value = libc_stat.st_ino;
   printf("inode = %lu\n", inode_value);
   /* VERIFY: Output should be 5160837 on your machine */
 
