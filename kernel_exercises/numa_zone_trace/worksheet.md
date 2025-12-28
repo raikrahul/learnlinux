@@ -2892,3 +2892,408 @@ Key functions:
 ```
 
 ---
+
+### Q23: CR3 → PTE → RMAP COMPLETE NUMERICAL TRACE
+
+```
+INPUT:  Process_A vaddr=0x7FFF00001000, Process_B vaddr=0x7FFE00002000, both map PFN=0x5000
+OUTPUT: _mapcount=1, anon_vma tree has 2 entries, kernel finds both PTEs
+```
+
+---
+
+```
+EXAMPLE 1: PROCESS A PAGE TABLE WALK (vaddr → PFN)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ CR3_A = 0x0000000001000000 (physical address of PML4 for Process A)         │
+│ vaddr = 0x7FFF00001000                                                       │
+│                                                                              │
+│ vaddr binary = 0111 1111 1111 1111 0000 0000 0000 0001 0000 0000 0000       │
+│ bits 47-39 = 0 1111 1111 = 255 (PML4 index)                                 │
+│ bits 38-30 = 1 1111 1100 = 508 (PDPT index)                                 │
+│ bits 29-21 = 0 0000 0000 = 0   (PD index)                                   │
+│ bits 20-12 = 0 0000 0001 = 1   (PT index)                                   │
+│ bits 11-0  = 0x000            (page offset)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+01. CR3_A = 0x1000000 (phys)
+02. PML4_base = 0x1000000
+03. PML4_index = (0x7FFF00001000 >> 39) & 0x1FF = 255
+04. PML4_entry_addr = 0x1000000 + 255×8 = 0x1000000 + 0x7F8 = 0x10007F8
+05. RAM[0x10007F8] = 0x0000000002000003 (PDPT phys=0x2000000, Present=1, R/W=1)
+```
+
+```
+06. PDPT_base = 0x2000000
+07. PDPT_index = (0x7FFF00001000 >> 30) & 0x1FF = 508
+08. PDPT_entry_addr = 0x2000000 + 508×8 = 0x2000000 + 0xFE0 = 0x2000FE0
+09. RAM[0x2000FE0] = 0x0000000003000003 (PD phys=0x3000000)
+```
+
+```
+10. PD_base = 0x3000000
+11. PD_index = (0x7FFF00001000 >> 21) & 0x1FF = 0
+12. PD_entry_addr = 0x3000000 + 0×8 = 0x3000000
+13. RAM[0x3000000] = 0x0000000004000003 (PT phys=0x4000000)
+```
+
+```
+14. PT_base = 0x4000000
+15. PT_index = (0x7FFF00001000 >> 12) & 0x1FF = 1
+16. PTE_addr_A = 0x4000000 + 1×8 = 0x4000008
+17. RAM[0x4000008] = 0x0000000005000067 (PFN=0x5000, Present, R/W, User, Accessed, Dirty)
+18. PFN_A = (0x5000067 & 0xFFFFFFFFF000) >> 12 = 0x5000 ✓
+```
+
+---
+
+```
+EXAMPLE 2: PROCESS B PAGE TABLE WALK (different vaddr, SAME PFN)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ CR3_B = 0x0000000010000000 (different process, different PML4)              │
+│ vaddr_B = 0x7FFE00002000                                                     │
+│                                                                              │
+│ bits 47-39 = 255 (PML4 index)                                               │
+│ bits 38-30 = 504 (PDPT index) ← DIFFERENT from Process A                    │
+│ bits 29-21 = 0   (PD index)                                                 │
+│ bits 20-12 = 2   (PT index)   ← DIFFERENT from Process A                    │
+│ bits 11-0  = 0x000                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+19. CR3_B = 0x10000000
+20. PML4_B_base = 0x10000000
+21. PML4_index = 255
+22. PML4_entry_addr = 0x10000000 + 255×8 = 0x100007F8
+23. RAM[0x100007F8] = 0x0000000011000003 (PDPT_B phys=0x11000000)
+```
+
+```
+24. PDPT_B_base = 0x11000000
+25. PDPT_index = 504
+26. PDPT_entry_addr = 0x11000000 + 504×8 = 0x11000000 + 0xFC0 = 0x11000FC0
+27. RAM[0x11000FC0] = 0x0000000012000003 (PD_B phys=0x12000000)
+```
+
+```
+28. PD_B_base = 0x12000000
+29. PD_index = 0
+30. PD_entry_addr = 0x12000000 + 0 = 0x12000000
+31. RAM[0x12000000] = 0x0000000013000003 (PT_B phys=0x13000000)
+```
+
+```
+32. PT_B_base = 0x13000000
+33. PT_index = 2
+34. PTE_addr_B = 0x13000000 + 2×8 = 0x13000010
+35. RAM[0x13000010] = 0x0000000005000067 (PFN=0x5000) ← SAME PFN AS PROCESS A
+36. PFN_B = 0x5000 = PFN_A ✓
+```
+
+---
+
+```
+STATE: TWO PTEs POINT TO SAME PHYSICAL PAGE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PTE_A at phys 0x4000008: value=0x5000067, points to PFN 0x5000              │
+│ PTE_B at phys 0x13000010: value=0x5000067, points to PFN 0x5000             │
+│                                                                              │
+│ struct page for PFN 0x5000:                                                  │
+│   _mapcount = 1 (meaning 2 PTEs: stored as count-1)                         │
+│   mapping   = 0xFFFF888020000001 (anon_vma at 0xFFFF888020000000 | 0x1)     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+```
+EXAMPLE 3: struct page LOCATION (PFN → struct page address)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ vmemmap base = 0xFFFFEA0000000000                                           │
+│ sizeof(struct page) = 64 bytes                                              │
+│ PFN = 0x5000                                                                 │
+│                                                                              │
+│ page_addr = vmemmap + PFN × 64                                              │
+│           = 0xFFFFEA0000000000 + 0x5000 × 64                                │
+│           = 0xFFFFEA0000000000 + 0x5000 × 0x40                              │
+│           = 0xFFFFEA0000000000 + 0x140000                                   │
+│           = 0xFFFFEA0000140000                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+37. struct_page_addr = 0xFFFFEA0000140000
+38. RAM[0xFFFFEA0000140000 + 0]  = flags     = 0x0000000000040068
+39. RAM[0xFFFFEA0000140000 + 8]  = lru.next  = 0xFFFF888030000100
+40. RAM[0xFFFFEA0000140000 + 16] = lru.prev  = 0xFFFF888030000200
+41. RAM[0xFFFFEA0000140000 + 24] = mapping   = 0xFFFF888020000001  ← anon_vma | 0x1
+42. RAM[0xFFFFEA0000140000 + 32] = index     = 0x0000000000001000  ← vaddr >> 12
+43. RAM[0xFFFFEA0000140000 + 40] = private   = 0x0000000000000000
+44. RAM[0xFFFFEA0000140000 + 48] = _mapcount = 0x00000001          ← atomic_t, value=1 means 2 PTEs
+45. RAM[0xFFFFEA0000140000 + 52] = _refcount = 0x00000002          ← atomic_t, value=2
+```
+
+---
+
+```
+EXAMPLE 4: EXTRACT anon_vma FROM page->mapping
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ page->mapping = 0xFFFF888020000001                                          │
+│ LSB = 1 → anonymous page                                                    │
+│ anon_vma = 0xFFFF888020000001 & ~0x1 = 0xFFFF888020000000                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+46. mapping_raw = 0xFFFF888020000001
+47. is_anon = mapping_raw & 0x1 = 1 ✓
+48. anon_vma_addr = mapping_raw & 0xFFFFFFFFFFFFFFFE = 0xFFFF888020000000
+```
+
+---
+
+```
+EXAMPLE 5: anon_vma STRUCTURE AT 0xFFFF888020000000
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ struct anon_vma at 0xFFFF888020000000:                                      │
+│   +0:  root       = 0xFFFF888020000000 (points to self, root of tree)       │
+│   +8:  rwsem      = { owner=0, count=0 }                                    │
+│   +32: refcount   = 2 (2 VMAs reference this anon_vma)                      │
+│   +40: num_children = 1                                                      │
+│   +48: num_active_vmas = 2                                                   │
+│   +56: parent     = NULL (this is root)                                      │
+│   +64: rb_root    = { rb_node = 0xFFFF888021000000 } ← interval tree root   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+49. RAM[0xFFFF888020000000 + 64] = rb_root.rb_node = 0xFFFF888021000000
+```
+
+---
+
+```
+EXAMPLE 6: INTERVAL TREE OF anon_vma_chain NODES
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ rb_root.rb_node = 0xFFFF888021000000                                        │
+│                                                                              │
+│ Tree structure (2 nodes for 2 VMAs):                                        │
+│                                                                              │
+│                    ┌─────────────────────┐                                  │
+│                    │ anon_vma_chain_A    │                                  │
+│                    │ at 0xFFFF888021000000│                                  │
+│                    │ vma=0xFFFF888040000000│                                │
+│                    │ rb.left=NULL         │                                  │
+│                    │ rb.right=0xFFFF888021000080│                            │
+│                    └──────────┬──────────┘                                  │
+│                               │                                              │
+│                    ┌──────────▼──────────┐                                  │
+│                    │ anon_vma_chain_B    │                                  │
+│                    │ at 0xFFFF888021000080│                                  │
+│                    │ vma=0xFFFF888050000000│                                │
+│                    │ rb.left=NULL         │                                  │
+│                    │ rb.right=NULL        │                                  │
+│                    └─────────────────────┘                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+50. anon_vma_chain_A at 0xFFFF888021000000:
+51.   RAM[+0]  = vma        = 0xFFFF888040000000 (VMA_A)
+52.   RAM[+8]  = anon_vma   = 0xFFFF888020000000
+53.   RAM[+16] = same_vma   = { next, prev }
+54.   RAM[+32] = rb         = { rb_parent_color, rb_right=0xFFFF888021000080, rb_left=NULL }
+55.   RAM[+56] = rb_subtree_last = 0x7FFF00002000
+
+56. anon_vma_chain_B at 0xFFFF888021000080:
+57.   RAM[+0]  = vma        = 0xFFFF888050000000 (VMA_B)
+58.   RAM[+8]  = anon_vma   = 0xFFFF888020000000
+59.   RAM[+32] = rb         = { rb_parent=0xFFFF888021000000, rb_right=NULL, rb_left=NULL }
+60.   RAM[+56] = rb_subtree_last = 0x7FFE00003000
+```
+
+---
+
+```
+EXAMPLE 7: VMA STRUCTURES (WHERE PTEs CAN BE FOUND)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ VMA_A at 0xFFFF888040000000 (Process A's VMA):                              │
+│   vm_start = 0x7FFF00000000                                                  │
+│   vm_end   = 0x7FFF00010000                                                  │
+│   vm_mm    = 0xFFFF888060000000 (mm_struct of Process A)                    │
+│   vm_pgoff = 0                                                               │
+│                                                                              │
+│ VMA_B at 0xFFFF888050000000 (Process B's VMA):                              │
+│   vm_start = 0x7FFE00000000                                                  │
+│   vm_end   = 0x7FFE00010000                                                  │
+│   vm_mm    = 0xFFFF888070000000 (mm_struct of Process B)                    │
+│   vm_pgoff = 0                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+61. VMA_A.vm_start = 0x7FFF00000000
+62. VMA_A.vm_end   = 0x7FFF00010000
+63. VMA_A.vm_mm    = 0xFFFF888060000000
+64. VMA_A.vm_mm->pgd = CR3_A = 0x1000000
+
+65. VMA_B.vm_start = 0x7FFE00000000
+66. VMA_B.vm_end   = 0x7FFE00010000
+67. VMA_B.vm_mm    = 0xFFFF888070000000
+68. VMA_B.vm_mm->pgd = CR3_B = 0x10000000
+```
+
+---
+
+```
+RMAP WALK: FINDING ALL PTEs FOR PFN 0x5000
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: page = pfn_to_page(0x5000) = 0xFFFFEA0000140000                     │
+│ STEP 2: anon_vma = page->mapping & ~1 = 0xFFFF888020000000                  │
+│ STEP 3: walk rb_root starting at 0xFFFF888021000000                         │
+│                                                                              │
+│ ITERATION 1:                                                                 │
+│   node = 0xFFFF888021000000                                                  │
+│   vma = node->vma = 0xFFFF888040000000                                      │
+│   page_index = page->index = 0x1000                                         │
+│   vaddr = vma->vm_start + (page_index - vma->vm_pgoff) × 4096              │
+│         = 0x7FFF00000000 + (0x1000 - 0) × 4096                              │
+│         = 0x7FFF00000000 + 0x1000000                                        │
+│         = 0x7FFF00001000 ← vaddr in Process A                               │
+│   walk page table with mm=VMA_A.vm_mm, vaddr=0x7FFF00001000                 │
+│   PTE found at 0x4000008 ✓                                                  │
+│                                                                              │
+│ ITERATION 2:                                                                 │
+│   node = 0xFFFF888021000080 (rb.right of previous)                          │
+│   vma = node->vma = 0xFFFF888050000000                                      │
+│   vaddr = 0x7FFE00000000 + (0x1000 - 0) × 4096                              │
+│         = 0x7FFE00000000 + 0x1000000                                        │
+│         = 0x7FFE00001000 ← WAIT, this doesn't match!                        │
+│                                                                              │
+│   RECALCULATE: page->index for anon = vaddr >> PAGE_SHIFT                   │
+│   For Process A: index_A = 0x7FFF00001000 >> 12 = 0x7FFF00001               │
+│   For Process B: index_B = 0x7FFE00002000 >> 12 = 0x7FFE00002               │
+│   These are DIFFERENT! ← TRAP                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+```
+TRAP EXPLANATION: WHY page->index DIFFERS FOR ANON SHARED PAGES
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FORK SCENARIO:                                                               │
+│                                                                              │
+│ 1. Process A allocates page at vaddr 0x7FFF00001000                         │
+│    page->index = 0x7FFF00001 (vaddr >> 12)                                  │
+│                                                                              │
+│ 2. Process A forks → Process B created                                      │
+│    - PTEs copied, both point to same PFN 0x5000                             │
+│    - Process B has SAME vaddr 0x7FFF00001000 initially                      │
+│    - page->index still = 0x7FFF00001                                        │
+│                                                                              │
+│ 3. For COW scenario with DIFFERENT vaddr:                                   │
+│    - mmap at different address in child                                     │
+│    - But shared via fork maintains same vaddr                               │
+│                                                                              │
+│ CORRECT MODEL: After fork, both processes have same vaddr for same page    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+69. Process A: vaddr = 0x7FFF00001000, PFN = 0x5000
+70. fork() creates Process B
+71. Process B: vaddr = 0x7FFF00001000, PFN = 0x5000 (SAME vaddr after fork)
+72. page->index = 0x7FFF00001 (set by Process A, shared after fork)
+73. _mapcount: 0 → 1 (fork increments)
+```
+
+---
+
+```
+CORRECTED RMAP WALK WITH FORK
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ VMA_A: vm_start=0x7FFF00000000, vm_end=0x7FFF00010000, vm_pgoff=0          │
+│ VMA_B: vm_start=0x7FFF00000000, vm_end=0x7FFF00010000, vm_pgoff=0          │
+│ (After fork, child has SAME layout)                                         │
+│                                                                              │
+│ page->index = 0x7FFF00001                                                    │
+│                                                                              │
+│ For VMA_A:                                                                   │
+│   vaddr_A = vm_start + (index - vm_pgoff) × 4096                            │
+│           = 0x7FFF00000000 + (0x7FFF00001 - 0) × 4096                       │
+│           = 0x7FFF00000000 + 0x7FFF00001000                                 │
+│           = 0xFFFE00001000 ← OVERFLOW!                                      │
+│                                                                              │
+│ WAIT: index is NOT vaddr>>12 for this formula                               │
+│ index = (vaddr - vm_start) >> 12 + vm_pgoff                                 │
+│       = (0x7FFF00001000 - 0x7FFF00000000) >> 12 + 0                         │
+│       = 0x1000 >> 12 + 0                                                    │
+│       = 0x1 + 0 = 0x1                                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+74. page->index = 1 (offset within VMA, not absolute vaddr)
+75. VMA_A: vaddr = vm_start + index × 4096 = 0x7FFF00000000 + 1 × 4096 = 0x7FFF00001000 ✓
+76. VMA_B: vaddr = vm_start + index × 4096 = 0x7FFF00000000 + 1 × 4096 = 0x7FFF00001000 ✓
+77. Both VMAs yield same vaddr (but in different mm_structs)
+```
+
+---
+
+```
+FINAL PTE LOOKUP FOR BOTH PROCESSES
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ITERATION 1: VMA_A, mm_A, vaddr=0x7FFF00001000                              │
+│   CR3_A = mm_A->pgd = 0x1000000                                              │
+│   walk: 0x1000000 → 0x10007F8 → 0x2000FE0 → 0x3000000 → 0x4000008           │
+│   PTE_A = RAM[0x4000008] = 0x5000067 ✓                                      │
+│                                                                              │
+│ ITERATION 2: VMA_B, mm_B, vaddr=0x7FFF00001000                              │
+│   CR3_B = mm_B->pgd = 0x10000000                                             │
+│   walk: 0x10000000 → 0x100007F8 → 0x11000FC0 → 0x12000000 → 0x13000008      │
+│   PTE_B = RAM[0x13000008] = 0x5000067 ✓                                     │
+│                                                                              │
+│ RESULT: 2 PTEs found at physical addresses 0x4000008 and 0x13000008         │
+│ _mapcount = 1 → 2 PTEs ✓                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+78. PTE_A_phys = 0x4000008
+79. PTE_B_phys = 0x13000008
+80. count = 2 PTEs
+81. _mapcount + 1 = 1 + 1 = 2 ✓
+```
+
+---
+
+```
+COMPLEXITY ANALYSIS
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ _mapcount lookup: O(1) - just read atomic integer                           │
+│ anon_vma extraction: O(1) - mask off LSB                                    │
+│ rb_tree walk: O(log N + M) where N=VMAs in tree, M=VMAs containing page    │
+│ page table walk per VMA: O(4) - 4 levels                                    │
+│ Total: O(log N + M × 4)                                                     │
+│                                                                              │
+│ For 10000 processes sharing libc page:                                      │
+│   N = 10000, M = 10000 (all contain page)                                   │
+│   log₂(10000) ≈ 13                                                          │
+│   Total ≈ 13 + 10000 × 4 = 40013 memory accesses                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+82. N = 10000 VMAs
+83. log₂(10000) = 13.29 → 14 comparisons
+84. page_table_walks = 10000 × 4 = 40000
+85. total_accesses = 14 + 40000 = 40014
+86. time ≈ 40014 × 100ns = 4001400ns = 4ms (if all in RAM)
+```
+
+---
