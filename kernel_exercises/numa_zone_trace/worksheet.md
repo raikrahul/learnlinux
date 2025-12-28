@@ -5209,3 +5209,60 @@ PROOF BOTH ARE SAME:
 ```
 
 ---
+
+### Q34: HOW LD.SO KNOWS ELF BASE ADDRESS (axiomatic from execve)
+
+```
+A01. RAM = array of bytes at physical addresses 0x0 to 0xFFFFFFFF (32GB on your machine) → run: `cat /proc/meminfo | grep MemTotal` → MemTotal: 32617672 kB ✓
+A02. CPU register RIP = 64-bit value pointing to next instruction vaddr → CPU fetches instruction at vaddr RIP every cycle
+A03. execve("./got_proof", ...) = syscall 59 on x86_64 → run: `grep execve /usr/include/asm/unistd_64.h` → #define __NR_execve 59 ✓
+A04. Syscall transfers control: userspace → kernel → kernel function do_execve() runs
+A05. do_execve() calls search_binary_handler() → tries each binary format handler → ELF handler matches got_proof
+A06. ELF handler = load_elf_binary() in /usr/src/linux-source-6.8.0/fs/binfmt_elf.c line 819
+```
+
+```
+A07. Kernel reads got_proof file bytes 0-63 → ELF header → check: byte 0-3 = 0x7f 'E' 'L' 'F' ✓ → run: `xxd -l 4 /usr/lib/x86_64-linux-gnu/libc.so.6` → 7f454c46 ✓
+A08. Kernel reads got_proof program headers → finds PT_INTERP segment → contains string "/lib64/ld-linux-x86-64.so.2"
+A09. Kernel loads ld-linux-x86-64.so.2 into memory using mmap() → kernel returns vaddr where ld.so loaded
+A10. Kernel loads got_proof PT_LOAD segments into memory → kernel picks vaddr using ASLR → stores in bprm->p
+A11. Kernel sets registers: RIP = ld.so entry point, RSP = stack top, passes got_proof base address via auxiliary vector
+A12. Auxiliary vector = array of (type, value) pairs pushed on stack → AT_BASE = ld.so base, AT_PHDR = got_proof program headers address, AT_ENTRY = got_proof _start
+```
+
+```
+A13. CPU now executes ld.so code at RIP = ld.so entry → ld.so's _start runs → ld.so reads auxiliary vector from stack
+A14. ld.so reads AT_PHDR → gets got_proof program headers vaddr → parses to find PT_DYNAMIC segment
+A15. PT_DYNAMIC contains: DT_NEEDED = "libc.so.6" (library dependency), DT_SYMTAB, DT_STRTAB, DT_HASH
+A16. ld.so must load libc.so.6 → calls open("/usr/lib/x86_64-linux-gnu/libc.so.6") → returns fd=3
+A17. ld.so reads libc.so.6 ELF header from fd=3 → parses PT_LOAD segments → calculates total size needed
+A18. ld.so calls mmap(NULL, total_size, PROT_READ, MAP_PRIVATE, fd, 0) → KERNEL picks address with ASLR → returns 0x760cee200000
+A19. mmap() return value = 0x760cee200000 → THIS IS HOW ld.so KNOWS ELF BASE → ld.so called mmap, kernel told it where
+A20. ld.so stores 0x760cee200000 in link_map structure → link_map.l_addr = 0x760cee200000
+```
+
+```
+A21. struct link_map defined in glibc → field l_addr = ELF base address → field l_name = "/usr/lib/.../libc.so.6"
+A22. ld.so maintains linked list of link_map → head = got_proof → next = libc.so.6 → next = NULL
+A23. dlsym("printf") → ld.so walks link_map list → for each: search .dynsym for "printf" → found in libc.so.6 at symbol offset 0x60100
+A24. ld.so reads libc link_map.l_addr = 0x760cee200000 → calculates vaddr = l_addr + symbol_offset = 0x760cee200000 + 0x60100 = 0x760cee260100
+A25. dlsym returns 0x760cee260100 → your code receives this address → can now call printf at that vaddr
+```
+
+```
+VERIFICATION ON YOUR MACHINE:
+run: `LD_DEBUG=libs ./got_proof 2>&1 | head -20` → shows ld.so loading libc at runtime with actual addresses
+run: `cat /proc/self/maps | grep libc | head -1` → shows libc VMA with offset
+run: `readelf -d /home/r/Desktop/learnlinux/kernel_exercises/numa_zone_trace/got_proof | grep NEEDED` → shows libc.so.6 dependency
+```
+
+```
+NEW THINGS INTRODUCED WITHOUT PRIOR DERIVATION IN THIS RESPONSE:
+N01. auxiliary vector (AT_BASE, AT_PHDR, AT_ENTRY) → derived from kernel passing info to ld.so via stack
+N02. PT_DYNAMIC segment → derived from ELF program header types, needed for finding dependencies
+N03. DT_NEEDED tag → derived from .dynamic section entries, specifies library dependency
+N04. link_map structure → derived from glibc internal, ld.so uses this to track loaded libraries
+N05. symbol offset in .dynsym → derived from ELF symbol table format, nm -D shows these offsets
+```
+
+---
