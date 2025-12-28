@@ -5032,3 +5032,79 @@ scanf:  0x7ceac3428000 <= 0x7ceac34662a0 < 0x7ceac35b0000 ✓
 ```
 
 ---
+
+### Q32: WHO DECIDES ELF BASE ADDRESS (from kernel source)
+
+```
+QUESTION: libc.so.6 loaded at ELF base = 0x760cee200000
+          Who decided this address?
+```
+
+```
+ANSWER: KERNEL (fs/binfmt_elf.c) decides via ASLR
+
+YOUR MACHINE:
+  cat /proc/sys/kernel/randomize_va_space = 2
+  2 = full ASLR (stack + mmap + heap randomized)
+```
+
+```
+KERNEL SOURCE PROOF (/usr/src/linux-source-6.8.0/fs/binfmt_elf.c):
+
+Line 1006-1008 (check if ASLR enabled):
+  const int snapshot_randomize_va_space = READ_ONCE(randomize_va_space);
+  if (!(current->personality & ADDR_NO_RANDOMIZE) && snapshot_randomize_va_space)
+      current->flags |= PF_RANDOMIZE;
+
+Line 1087-1090 (calculate load_bias for shared libraries):
+  if (interpreter) {
+      load_bias = ELF_ET_DYN_BASE;           ← base address starts here
+      if (current->flags & PF_RANDOMIZE)
+          load_bias += arch_mmap_rnd();      ← ASLR adds random offset
+  }
+
+Line 1133-1134 (mmap the ELF):
+  error = elf_load(bprm->file, load_bias + vaddr, elf_ppnt, ...);
+```
+
+```
+CALCULATION for libc.so.6:
+
+01. ELF_ET_DYN_BASE (x86_64) ≈ 0x7F0000000000 (start of mmap region)
+02. arch_mmap_rnd() generates random bits (e.g., 0x60cee200000)
+03. load_bias = 0x7F0000000000 + random = varies each run
+04. libc.so.6 first LOAD segment VirtAddr = 0x0 (from readelf -l)
+05. Final ELF base = load_bias + VirtAddr = load_bias + 0 = 0x760cee200000
+06. Each run gets DIFFERENT base due to ASLR:
+    Run 1: 0x760cee200000
+    Run 2: 0x7abc12300000
+    Run 3: 0x7def45600000
+```
+
+```
+PROOF FROM readelf (your machine):
+  readelf -l /usr/lib/x86_64-linux-gnu/libc.so.6
+  Type   Offset             VirtAddr         ... Flags
+  LOAD   0x0000000000000000 0x0000000000000000 ... R      ← first LOAD at VirtAddr 0
+  LOAD   0x0000000000028000 0x0000000000028000 ... R E    ← .text section
+  
+∴ ELF base = where VirtAddr 0 maps = 0x760cee200000
+∴ r-xp VMA start = ELF base + 0x28000 = 0x760cee228000 (matches /proc/self/maps)
+```
+
+```
+DECISION CHAIN:
+execve("got_proof") → 
+  kernel load_elf_binary() (line 819) →
+  check randomize_va_space (line 1006) →
+  set PF_RANDOMIZE flag (line 1008) →
+  load_bias = ELF_ET_DYN_BASE + arch_mmap_rnd() (line 1088-1090) →
+  elf_load() maps libc at load_bias (line 1133) →
+  ELF base = 0x760cee200000
+
+∴ KERNEL decides ELF base address
+∴ arch_mmap_rnd() generates random offset (ASLR security)
+∴ Each program run gets different base
+```
+
+---
