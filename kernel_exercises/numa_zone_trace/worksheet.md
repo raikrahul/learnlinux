@@ -429,3 +429,193 @@ A: There are TWO levels:
 111. WHY KERNEL DOES THIS: Kernel tries to allocate memory from local node. If your process runs on CPU 1, alloc_page() prefers Node 1. This minimizes remote access.
 
 ---
+
+### Q9: WHERE IS NUMA INFO IN STRUCT PAGE? EXPLAIN EACH FIELD FROM SCRATCH.
+
+112. WHY THIS SECTION: You asked "but i see no numa and explain each" - you noticed struct page doesn't have a "node" field. Where is it?
+
+113. AXIOM: struct page is 64 bytes. Source: `pahole -C "struct page" vmlinux` or kernel source.
+
+114. DRAW (struct page layout with EVERY field explained):
+```
+struct page for PFN 1000:
++-------+----------+--------+------------------------------------------+
+|OFFSET | FIELD    | SIZE   | EXPLANATION (FROM SCRATCH)               |
++-------+----------+--------+------------------------------------------+
+| +0    | flags    | 8 bytes| PACKED BITS: zone(3) + node(10) + flags  |
+|       |          |        | NODE IS HERE! ZONE IS HERE!              |
++-------+----------+--------+------------------------------------------+
+| +8    | _refcount| 4 bytes| How many users are using this page?      |
+|       |          |        | alloc=1, get_page=+1, put_page=-1        |
++-------+----------+--------+------------------------------------------+
+| +12   | _mapcount| 4 bytes| How many page tables map this page?      |
+|       |          |        | -1=unmapped, 0=mapped once, N=mapped N+1 |
++-------+----------+--------+------------------------------------------+
+| +16   | mapping  | 8 bytes| Pointer to address_space (file) or anon  |
+|       |          |        | NULL if not file-backed or anonymous     |
++-------+----------+--------+------------------------------------------+
+| +24   | index    | 8 bytes| Offset within file or swap slot number   |
++-------+----------+--------+------------------------------------------+
+| +32   | private  | 8 bytes| Used by filesystem or buddy allocator    |
+|       |          |        | buddy: stores order (0,1,2..10)          |
++-------+----------+--------+------------------------------------------+
+| +40   | lru      | 16bytes| Linked list pointers (prev + next)       |
+|       |          |        | Links page into free list or LRU list    |
++-------+----------+--------+------------------------------------------+
+| +56   | (union)  | 8 bytes| Various overlapped fields                |
++-------+----------+--------+------------------------------------------+
+TOTAL: 64 bytes
+```
+
+---
+
+115. FIELD-BY-FIELD DERIVATION:
+
+### FLAGS (8 bytes at offset +0):
+
+116. PROBLEM: Kernel needs to know zone and node for each page. Options:
+     A) Add separate "node" field (4 bytes) + "zone" field (4 bytes) = 8 extra bytes per page.
+     B) Pack node and zone into existing flags field = 0 extra bytes.
+
+117. SOLUTION: PACK zone (3 bits for 8 zones) and node (10 bits for 1024 nodes) into top bits of flags.
+
+118. DRAW (flags field layout on x86_64):
+```
+flags (64 bits):
+|-- NODE (bits 54-63) --|-- ZONE (bits 51-53) --|-- SECTION --|-- FLAGS (bits 0-27) --|
+      10 bits                  3 bits                            28 bits
+
+EXAMPLE: flags = 0x0000000000010000
+Binary: 0000 0000 0000 0000 0000 0000 0000 0001 0000 0000 0000 0000
+
+Bits 54-63 (node): 0000000000 = node 0
+Bits 51-53 (zone): 000 = zone 0 = DMA  (or depends on encoding)
+Bits 0-27 (flags): 0x10000 = PG_buddy flag set? or other flag
+```
+
+119. FORMULA: page_to_nid(page) = (page->flags >> NODES_PGSHIFT) & NODES_MASK.
+120. FORMULA: page_zone(page) uses (page->flags >> ZONES_PGSHIFT) & ZONES_MASK.
+
+121. VERIFY: On your machine with 1 node, NODES_PGSHIFT likely = 54, NODES_MASK = 0x3FF (10 bits).
+
+---
+
+### _REFCOUNT (4 bytes at offset +8):
+
+122. PROBLEM: Multiple users may use same page (shared memory). Cannot free while in use.
+
+123. SOLUTION: Count users. Increment on acquire. Decrement on release. Free when zero.
+
+124. TRACE:
+```
+alloc_page()     → _refcount = 1 (one user: the allocator)
+get_page(page)   → _refcount = 2 (second user acquired)
+put_page(page)   → _refcount = 1 (second user released)
+put_page(page)   → _refcount = 0 → PAGE FREED
+put_page(page)   → _refcount = -1 → BUG! underflow
+```
+
+125. TYPE: atomic_t = 4 bytes. Atomic = multiple CPUs can safely increment/decrement without race.
+
+---
+
+### _MAPCOUNT (4 bytes at offset +12):
+
+126. PROBLEM: Same physical page can be mapped into multiple processes' page tables.
+
+127. DEFINITION: _mapcount = number of page table entries pointing to this page MINUS ONE.
+
+128. TRACE:
+```
+_mapcount = -1  → page is NOT mapped in any page table
+_mapcount = 0   → page is mapped in 1 page table (0 + 1 = 1)
+_mapcount = 5   → page is mapped in 6 page tables (5 + 1 = 6)
+```
+
+129. WHY MINUS ONE: Saves checking for zero. Unmapped = -1. First map: -1+1=0. Second map: 0+1=1.
+
+130. USE: Kernel checks if page is mapped before freeing. If _mapcount ≠ -1 → page still mapped → don't free physical frame yet.
+
+---
+
+### MAPPING (8 bytes at offset +16):
+
+131. PROBLEM: Page may contain file data (backed by disk) or anonymous data (no file backing).
+
+132. DEFINITION: mapping = pointer to struct address_space (for file pages) or anon_vma (for anonymous pages).
+
+133. VALUES:
+```
+mapping = NULL              → page not associated with any file
+mapping = 0xFFFF888012345678 → points to address_space of some file
+mapping = 0xFFFF888012345679 → LSB=1 means anonymous page (pointer mangled)
+```
+
+134. USE: When page is dirty, kernel uses mapping to find which file to write back to.
+
+---
+
+### INDEX (8 bytes at offset +24):
+
+135. PROBLEM: Page contains part of a file. Which part? Offset 0? Offset 4096? Offset 8192?
+
+136. DEFINITION: index = offset within file in pages. index=5 → this page contains bytes 5×4096 to 6×4096-1 of file.
+
+137. ALTERNATIVE: For swap pages, index = swap slot number.
+
+---
+
+### PRIVATE (8 bytes at offset +32):
+
+138. PROBLEM: Buddy allocator needs to know order of free page. Filesystem needs to store buffer_head pointer.
+
+139. DEFINITION: private = multi-purpose field. Meaning depends on page state.
+
+140. USES:
+```
+For buddy allocator (free page): private = order (0, 1, 2, ... 10)
+For filesystem:                  private = pointer to buffer_head
+For compound page tail:          private = pointer to head page
+```
+
+---
+
+### LRU (16 bytes at offset +40):
+
+141. PROBLEM: Need to track which pages to evict when memory is low. Need linked lists.
+
+142. DEFINITION: lru = struct list_head = { next pointer (8 bytes), prev pointer (8 bytes) }.
+
+143. USES:
+```
+For free pages: links into buddy allocator's free list
+For active pages: links into LRU (Least Recently Used) list
+For slab pages: links into slab's page list
+```
+
+144. DRAW:
+```
+free_area[3].free_list → page_A.lru ↔ page_B.lru ↔ page_C.lru → (circular)
+                         ↑                                    |
+                         +------------------------------------+
+```
+
+---
+
+### SUMMARY: WHERE IS NODE/ZONE STORED?
+
+145. ANSWER:
+```
+NODE: packed in page->flags, bits 54-63 (10 bits = up to 1024 nodes)
+ZONE: packed in page->flags, bits 51-53 (3 bits = up to 8 zones)
+
+To extract node: page_to_nid(page) = (flags >> 54) & 0x3FF
+To extract zone: page_zonenum(page) = (flags >> 51) & 0x7
+
+Both are NOT separate fields. Both live inside the 8-byte flags field.
+This is why you didn't see a "node" field - it's HIDDEN in flags.
+```
+
+146. WHY PACK: Space efficiency. 3944069 pages × 8 extra bytes for node+zone = 31.5 MB wasted. Better to pack into existing flags.
+
+---
