@@ -4055,3 +4055,85 @@ NUMERICAL TRACE: FORK OF PROCESS A → PROCESS B
 ```
 
 ---
+
+### Q26: ANON_VMA, RB_TREE, WHY? - DIRECT ANSWERS
+
+```
+188. Q: What is anon_vma?
+     A: anon_vma = data structure that links a PHYSICAL PAGE to ALL VMAs that map it.
+        page->mapping points to anon_vma, anon_vma->rb_root points to all VMAs.
+
+189. Q: Why do I care about anon_vma?
+     A: Without anon_vma, kernel cannot find "which PTEs map this page" for swap/migration.
+        _mapcount says "2 PTEs exist", anon_vma says "WHERE are those 2 PTEs".
+
+190. Q: What is rb_tree/interval_tree?
+     A: rb_tree = balanced binary search tree, O(log N) lookup.
+        interval_tree = rb_tree where each node stores [start, end] range.
+        Used to find "which VMAs contain page at offset X" in O(log N).
+
+191. Q: Why do I care about rb_tree?
+     A: 10000 processes map libc.so. Linear search = O(10000). rb_tree = O(14).
+        Without rb_tree, swap/migration would be O(N) per page = system freeze.
+
+192. Q: Process has VMA. Why anon_vma has rb_tree but VMA doesn't?
+     A: WRONG DIRECTION.
+        - VMA->page: process knows its VMAs, walks page table, O(1) per page.
+        - page->VMA: page doesn't know which VMAs map it! Need reverse index.
+        
+        anon_vma is the REVERSE INDEX: page → anon_vma → [VMA1, VMA2, ...].
+        rb_tree makes this reverse lookup O(log N) instead of O(N).
+
+193. Q: Why not put rb_tree in VMA?
+     A: VMA is per-process. You have VMA. You already know your VMAs.
+        Problem is: kernel has PAGE, needs to find ALL VMAs (from ALL processes) that map it.
+        anon_vma is the shared structure across processes that maps page → VMAs.
+```
+
+---
+
+```
+DRAW: FORWARD vs REVERSE LOOKUP
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FORWARD LOOKUP (easy):                                                       │
+│   Process has mm_struct → has VMA list → walk page table → find PTE → PFN   │
+│   You know your VMAs, just walk them. No tree needed.                       │
+│                                                                              │
+│ REVERSE LOOKUP (hard):                                                       │
+│   Kernel has PFN → ??? → which VMAs? which processes? which PTEs?           │
+│   PFN doesn't store "who maps me". Need external index.                     │
+│                                                                              │
+│   SOLUTION: page->mapping → anon_vma → rb_tree of [VMA1, VMA2, ...]         │
+│             Each VMA has vma->vm_mm → mm->pgd → walk → find PTE             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+194. FORWARD: Process → VMA → page_table → PTE → PFN (trivial, just walk)
+195. REVERSE: PFN → page → anon_vma → rb_tree → VMAs → PTEs (needs index)
+196. anon_vma IS the reverse index. rb_tree makes it O(log N).
+```
+
+---
+
+```
+WHY VMA USES MAPLE TREE, NOT RB_TREE FOR ITSELF
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Actually, VMAs ARE stored in a tree (maple tree, previously rb_tree).      │
+│                                                                              │
+│ mm_struct->mm_mt = maple tree of VMAs (find VMA containing vaddr)           │
+│ anon_vma->rb_root = interval tree of anon_vma_chains (find VMA from page)  │
+│                                                                              │
+│ DIFFERENT TREES FOR DIFFERENT LOOKUPS:                                      │
+│   mm->mm_mt: "given vaddr, which VMA?" - used by page fault handler         │
+│   anon_vma->rb_root: "given page, which VMAs?" - used by swap/migrate       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+197. mm->mm_mt (maple tree): vaddr → VMA (for page fault)
+198. anon_vma->rb_root: page → VMAs (for swap/migrate)
+199. Two trees, two lookup directions, two purposes.
+```
+
+---
