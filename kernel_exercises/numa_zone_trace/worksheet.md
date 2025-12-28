@@ -5108,3 +5108,104 @@ execve("got_proof") →
 ```
 
 ---
+
+### Q33: WHAT IS VMA FILE OFFSET (axiomatic derivation)
+
+```
+AXIOM 1: libc.so.6 file on disk = array of bytes, byte 0 to byte 2125327
+
+libc.so.6 file:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ byte 0                                              byte 2125327        │
+│ ↓                                                   ↓                   │
+│ [ELF HDR 0x0-0x27FFF][.text 0x28000-0x1AFFFF][.rodata 0x1B0000-...]     │
+│ ↑                     ↑                                                  │
+│ file offset 0         file offset 0x28000                               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+AXIOM 2: Sections have DIFFERENT permissions → kernel makes SEPARATE VMAs
+
+/proc/self/maps shows:
+  VMA1: 0x760cee200000-0x760cee228000 r--p offset=0x00000  ← ELF header (read-only)
+  VMA2: 0x760cee228000-0x760cee3b0000 r-xp offset=0x28000  ← .text (execute)
+  VMA3: 0x760cee3b0000-...            r--p offset=0x1b0000 ← .rodata (read-only)
+```
+
+```
+DEFINITION:
+VMA FILE OFFSET = "which file byte does this VMA start reading?"
+
+VMA1 offset = 0x00000 → VMA1 starts reading file at byte 0
+VMA2 offset = 0x28000 → VMA2 starts reading file at byte 163840
+VMA3 offset = 0x1b0000 → VMA3 starts reading file at byte 1769472
+```
+
+```
+DRAW:
+                    libc.so.6 file on disk
+                    ┌───────────────────────────────────┐
+                    │ byte 0      byte 0x28000  byte 0x1B0000
+                    │ ↓           ↓             ↓
+                    │ [ELF HDR   ][.text       ][.rodata    ]
+                    └───────────────────────────────────┘
+                          ↑           ↑             ↑
+                          │           │             │
+    ┌─────────────────────┘           │             └─────────────────────┐
+    │                                 │                                   │
+    ▼                                 ▼                                   ▼
+VMA1 starts here           VMA2 starts here              VMA3 starts here
+offset=0x00000             offset=0x28000                offset=0x1B0000
+vaddr=0x760cee200000       vaddr=0x760cee228000          vaddr=0x760cee3b0000
+
+WHY DIAGRAM: File sections → VMAs, each VMA starts at different file offset
+```
+
+```
+NUMERICAL TRACE (printf):
+
+01. printf is at file byte 0x60100 = 393472
+02. VMA2 (r-xp) starts at vaddr 0x760cee228000
+03. VMA2 (r-xp) starts reading file at byte 0x28000 = 163840
+04. Is printf INSIDE VMA2? 0x28000 < 0x60100 < 0x1B0000 ✓ (yes)
+05. Distance of printf from VMA2 start IN FILE:
+      0x60100 - 0x28000 = 0x38100 = 229632 bytes
+06. Distance in file = distance in vaddr (linear mapping)
+07. ∴ vaddr of printf = VMA2 start + 0x38100
+                      = 0x760cee228000 + 0x38100
+                      = 0x760cee260100 ✓
+```
+
+```
+TWO EQUIVALENT METHODS:
+
+METHOD 1 (dlsym uses this):
+  ELF base + symbol offset
+  = 0x760cee200000 + 0x60100
+  = 0x760cee260100 ✓
+
+METHOD 2 (your worksheet uses this):
+  r-xp VMA start + (symbol offset - VMA file offset)
+  = 0x760cee228000 + (0x60100 - 0x28000)
+  = 0x760cee228000 + 0x38100
+  = 0x760cee260100 ✓
+
+PROOF BOTH ARE SAME:
+  Let B = ELF base = 0x760cee200000
+  Let V = r-xp start = 0x760cee228000
+  Let S = symbol offset = 0x60100
+  Let O = VMA offset = 0x28000
+
+  B + S = V + (S - O)
+  B + S = V + S - O
+  B = V - O
+  0x760cee200000 = 0x760cee228000 - 0x28000 ✓
+```
+
+```
+∴ VMA FILE OFFSET = "how far into the file does this VMA begin"
+∴ VMA start vaddr + (file_byte - VMA offset) = vaddr of that file byte
+```
+
+---
