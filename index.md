@@ -57,6 +57,13 @@ Deep dive into Linux kernel memory management, page tables, and system internals
 | [buddy_fragment](/kernel_exercises/buddy_fragment/) | Buddy Allocator Fragmentation Demo |
 | [gfp_context_bug](/kernel_exercises/gfp_context_bug/) | GFP Flag Misuse in Atomic Context |
 | [numa_zone_trace](/kernel_exercises/numa_zone_trace/) | NUMA Zones, VMA, PTE, RMAP Tracing |
+| [struct_page_course](/kernel_exercises/struct_page_course/) | struct page Fields Deep Dive |
+| [struct_page_driver](/kernel_exercises/struct_page_driver/) | struct page Kernel Module |
+| [flags_zone_node](/kernel_exercises/flags_zone_node/) | Page Flags, Zone, Node Extraction |
+| [malloc_pagefault](/kernel_exercises/malloc_pagefault/) | malloc Page Fault Tracing |
+| [metadata_union](/kernel_exercises/metadata_union/) | struct page Metadata Union |
+| [anon_page_cache_metadata](/kernel_exercises/anon_page_cache_metadata/) | Anonymous vs File Page Metadata |
+| [lru_mlock_union](/kernel_exercises/lru_mlock_union/) | LRU vs mlock_count Union Demo |
 
 ## Machine Specifications
 
