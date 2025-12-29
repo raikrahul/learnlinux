@@ -64,6 +64,7 @@ Deep dive into Linux kernel memory management, page tables, and system internals
 | [metadata_union](/kernel_exercises/metadata_union/) | struct page Metadata Union |
 | [anon_page_cache_metadata](/kernel_exercises/anon_page_cache_metadata/) | Anonymous vs File Page Metadata |
 | [lru_mlock_union](/kernel_exercises/lru_mlock_union/) | LRU vs mlock_count Union Demo |
+| [mapping_field_decode](/kernel_exercises/mapping_field_decode/) | page->mapping Flag Decoding |
 
 ## Machine Specifications
 
