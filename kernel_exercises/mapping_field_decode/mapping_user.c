@@ -194,7 +194,7 @@ int main() {
   sleep(5);
 
   // --- STEP 3: WAIT FOR INSPECTION ---
-  printf("\n=== READY FOR KERNEL INSPECTION ===\n");
+  printf("\n=== READY FOR KERNEL INSPECTION (NORMAL) ===\n");
   printf("Runs these commands manually:\n");
   printf("  sudo insmod mapping_hw.ko target_pid=%d target_va=0x%lx (FILE)\n",
          getpid(), (unsigned long)file_ptr);
@@ -203,8 +203,71 @@ int main() {
   // NOTE: Inspecting KSM might fail if merge hasn't happened yet.
   printf("  sudo insmod mapping_hw.ko target_pid=%d target_va=0x%lx (KSM1)\n",
          getpid(), (unsigned long)ksm_ptr1);
+
+  // --- STEP 4: CREATE HUGE PAGE (COMPOUND) ---
+  /*
+   * TODO 6: TRIGGER THP (COMPOUND PAGE) - MANUAL ALIGNMENT
+   * ------------------------------------------------------
+   * AXIOM 1: Huge Page Size = 2MB = 2 * 1024 * 1024 = 2097152 bytes = 0x200000.
+   * AXIOM 2: `mmap` usually gives 4KB alignment (0x1000). THP needs 2MB
+   * alignment.
+   *
+   * TASK: Allocate memory such that we can find a 2MB aligned address inside
+   * it. CALCULATION TRACE:
+   * 1. We need 2MB of valid memory STARTING at address X where X % 2MB == 0.
+   * 2. If we alloc exactly 2MB, OS might give range [0x1001000, 0x1201000].
+   *    -> This is NOT aligned. 0x1001000 % 0x200000 != 0.
+   * 3. If we alloc 4MB (2x Size), we guarantee a 2MB boundary exists inside.
+   *    -> Range [0x1001000, 0x1401000].
+   *    -> Aligned Addr = Nearest 2MB boundary up from Start.
+   *
+   * FORMULA (ALIGN UP):
+   *    Aligned = (Raw + (Alignment - 1)) & ~(Alignment - 1)
+   *
+   * WORK:
+   * 1. mmap 4MB.
+   * 2. Calculate `thp_ptr` aligned to 0x200000.
+   * 3. madvise(thp_ptr, 2MB, MADV_HUGEPAGE).
+   * 4. Write to `thp_ptr[0]` (Head) and `thp_ptr[PAGE_SIZE]` (Tail).
+   */
+  void *thp_raw;
+  char *thp_ptr;
+
+  // 1. ALLOCATE 4MB
+  thp_raw = mmap(NULL, 1 << 22, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  // ...
+
+  // 2. CALCULATE ALIGNED ADDRESS (DO THE MATH MANUALLY)
+  unsigned long raw_addr = (unsigned long)thp_raw;
+  unsigned long aligned_addr = (raw_addr + (1 << 21) - 1) & ~((1 << 21) - 1);
+  thp_ptr = (char *)aligned_addr;
+
+  // 3. MARK HUGEPAGE
+  if (madvise(thp_ptr, 1 << 21, MADV_HUGEPAGE) < 0)
+    perror("madvise thp");
+
+  // 4. TRIGGER FAULT
+  thp_ptr[0] = 'A';
+  thp_ptr[PAGE_SIZE] = 'B';
+
+  printf("\n[4] HUGE PAGE (COMPOUND) CREATED:\n");
+  printf("    Raw mmap:  %p\n", thp_raw);
+  printf("    Aligned:   %p (2MB aligned)\n", thp_ptr);
+  printf("    HEAD:      %p (offset 0)\n", thp_ptr);
+  printf("    TAIL1:     %p (offset 4096)\n", thp_ptr + PAGE_SIZE);
+  printf("\n  Inspect with:\n");
+  printf("  sudo insmod mapping_hw.ko target_pid=%d target_va=0x%lx (HEAD)\n",
+         getpid(), (unsigned long)thp_ptr);
+  printf("  sudo insmod mapping_hw.ko target_pid=%d target_va=0x%lx (TAIL)\n",
+         getpid(), (unsigned long)(thp_ptr + PAGE_SIZE));
+
   printf("\nPress ENTER to clean up and exit...");
   getchar();
+
+  // CLEANUP
+  munmap(thp_raw, 1 << 22);
 
   munmap(file_ptr, PAGE_SIZE);
   munmap(anon_ptr, PAGE_SIZE);

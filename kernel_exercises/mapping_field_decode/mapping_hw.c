@@ -52,7 +52,59 @@ static struct page *get_user_page(int pid_nr, unsigned long addr) {
   return page;
 }
 
+static void hexdump_struct_page(struct page *p) {
+  /*
+   * TODO 7: CRACK THE 0x800000 MYSTERY (REVERSE ENGINEER BY HAND)
+   * -------------------------------------------------------------
+   * TASK: Write a brute-force HEX DUMP of the 64 bytes of struct page.
+   * WHY:  We saw '0x800000' in mapping. We need to see WHICH BYTE it lives in
+   * to map it to a field.
+   *
+   * AXIOM TABLE (BYTES 0-63):
+   * 1. [0x00-0x07] FLAGS        : unsigned long (8 bytes).
+   *    -> 0xffffEA00..00 : 0x0000000000000000 (Example)
+   *
+   * 2. [0x08-0x0F] COMPOUND_HEAD: unsigned long (8 bytes) / LRU.next
+   *    -> 0xffffEA00..08 : 0xffffEA00..01 (Tail Bit Set)
+   *
+   * 3. [0x10-0x17] LRU.PREV     : unsigned long (8 bytes) / filler
+   *    -> 0xffffEA00..10 : 0xdead000000000122 (List Poison 2?)
+   *
+   * 4. [0x18-0x1F] MAPPING      : unsigned long (8 bytes) / anon_vma
+   *    -> 0xffffEA00..18 : 0x0000000000800000 (THE MYSTERY VALUE)
+   *    -> CALC: 0x800000 = 1000... (Binary)
+   *    -> Byte Offset: 0x18 + 0 = 0x18 (Little Endian LSB)?
+   *    -> Byte Offset: 0x18 + 2 = 0x1A (0x80 is 3rd byte)?
+   *    -> 0x800000 >> 16 = 0x80. So it is Byte 2 of the word.
+   *    -> Absolute Offset = 0x18 + 2 = 0x1A = 26 decimal.
+   *    -> STRUCT OFFSET: 26 bytes from start of struct page.
+   *
+   * 5. [0x20-0x27] INDEX        : unsigned long (8 bytes)
+   *    -> 0xffffEA00..20 : 0x0000000000000000
+   *
+   * 6. [0x28-0x2F] PRIVATE      : unsigned long (8 bytes)
+   *    -> 0xffffEA00..28 : 0x0000000000000000
+   *
+   * 7. [0x30-0x37] REFCOUNT     : atomic_t (4) + mapcount (4) ??
+   *    -> WARNING: Check mm_types.h for exact overlay.
+   *
+   * INSTRUCTION:
+   * 1. Cast `p` to `unsigned long *`.
+   * 2. Loop `i` from 0 to 7 (8 words * 8 bytes = 64 bytes).
+   * 3. Printk each word with its OFFSET (e.g. "OFFSET 0x08: Value...").
+   * 4. DO NOT USE ARRAY NOTATION if you can avoid it. Use Pointer Arithmetic.
+   *    -> `addr = (unsigned long)p + (i * 8)`
+   *    -> `val = *(unsigned long *)addr`
+   */
+
+  // WRITE YOUR CODE HERE:
+  // ...
+}
+
 static void inspect_mapping(struct page *page) {
+  // Call the dump first to see the raw bits
+  hexdump_struct_page(page);
+
   unsigned long raw_mapping;
   unsigned long flags;
   unsigned long clean_ptr;
@@ -147,6 +199,36 @@ static void inspect_mapping(struct page *page) {
    */
 
   // WRITE YOUR CODE HERE:
+  /*
+   * TODO 5: DETECT COMPOUND TAIL PAGE
+   * ---------------------------------
+   * AXIOM: Tail pages have Bit 0 set in `compound_head`.
+   * AXIOM: `compound_head` overlaps `lru.next`.
+   * WORK: Read the first word of struct page.
+   */
+  unsigned long head_val = page->compound_head; // Access via Union
+
+  if (head_val & 1) {
+    printk(KERN_INFO "MAPPING_DECODE: [TAIL PAGE DETECTED]\n");
+    printk(KERN_INFO "MAPPING_DECODE: compound_head = 0x%lx (Bit 0 set)\n",
+           head_val);
+
+    struct page *head_page = (struct page *)(head_val - 1);
+    printk(KERN_INFO "MAPPING_DECODE: Head Page Ptr = 0x%px\n", head_page);
+
+    // CHECK TAIL_MAPPING
+    if (raw_mapping == (unsigned long)TAIL_MAPPING) {
+      printk(KERN_INFO
+             "MAPPING_DECODE: Mapping == TAIL_MAPPING (0x400) [Confirmed]\n");
+    } else {
+      printk(KERN_ERR "MAPPING_DECODE: Mapping (0x%lx) != TAIL_MAPPING (0x%lx) "
+                      "[Unexpected!]\n",
+             raw_mapping, (unsigned long)TAIL_MAPPING);
+    }
+    return; // Stop here for tail pages
+  }
+
+  // Normal Page Logic ...
   if (flags == 0) {
     printk(KERN_INFO "MAPPING_DECODE: Page is aligned (8-byte).\n");
     printk(KERN_INFO "MAPPING_DECODE: Clean Pointer = 0x%lx\n", clean_ptr);
