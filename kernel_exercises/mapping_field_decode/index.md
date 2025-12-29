@@ -1,3 +1,7 @@
+---
+layout: post
+title: "Mapping Field Decode Exercise"
+---
 # MAPPING FIELD DECODE EXERCISE
 
 ## PHASE 1: AXIOMATIC INTERROGATION (COMPLETED)
